@@ -4,7 +4,7 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-![Version](https://img.shields.io/badge/version-1.3.0-7C3AED.svg)
+![Version](https://img.shields.io/badge/version-1.4.0-7C3AED.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-D97706.svg)
 ![Python](https://img.shields.io/badge/python-3.8%20%7C%203.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-2563EB.svg)
 ![License](https://img.shields.io/badge/license-MIT-10B981.svg)
@@ -42,6 +42,7 @@ python run.py
 ### 🔌 Interface Integrations
 
 - [Data] yfinance ✅ - US equities, A-shares, HK equities, crypto, and indices
+- [Data] baostock ✅ - A-share / index historical bars for backtests (codes: `sh.600000` / `sz.000001`)
 - [Data] eastmoney ✅ - Off-exchange funds (index, QDII, equity, bond, hybrid)
 - [Data] miniQMT ✅ - A-shares, indices, ETF (see the live-trading chapter in the course)
 - [Trade] PaperTrade ✅ - Local simulated trading, tick-level order matching, positions and order management
@@ -88,7 +89,7 @@ deltafstation/
 │   └── app.py        # Flask entry
 ├── config/
 ├── data/
-│   ├── raw/          # Raw OHLCV CSV; symbols_dict_*.json catalogs (miniqmt maintained via local xtdata)
+│   ├── raw/          # Raw OHLCV CSV; symbols_dict_{yfinance,miniqmt,baostock}.json catalogs (miniqmt via local xtdata; baostock uses native sh./sz. codes)
 │   ├── results/      # Backtest results JSON
 │   ├── simulations/  # Account config JSON (local_paper and broker, unified SIM_*.json)
 │   └── strategies/   # Strategy Python files

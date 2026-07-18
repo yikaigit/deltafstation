@@ -1,5 +1,14 @@
 # DeltaFStation 更新记录 / Changelog
 
+## [1.4.0] - 2026-07-19
+
+### 📦 回测支持 baostock 数据源
+
+- **依赖**：`requirements.txt` 增加 `baostock`，并将 `deltafq` 提升至 `>=1.1.0`（含 baostock K 线适配）。
+- **数据拉取**：`DataManager.fetch_data` 支持 `data_source=baostock`；标的代码保持 baostock 原生格式（`sh.600000` / `sz.000001`）。
+- **标的目录**：新增 `data/raw/symbols_dict_baostock.json`（约 5.7k 条，含个股与指数），`GET /api/data/symbols/catalog?source=baostock` 可读；`.gitignore` 白名单放行该文件。
+- **回测页**：数据源下拉增加 `baostock`；默认示例代码 `sz.000001`；建议列表支持按代码/名称检索，并正确解析 `sh.`/`sz.` 格式。
+
 ## [1.3.0] - 2026-05-28
 
 ### 🚀 策略运行页支持 QMT 实盘

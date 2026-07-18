@@ -4,7 +4,7 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-![Version](https://img.shields.io/badge/version-1.3.0-7C3AED.svg)
+![Version](https://img.shields.io/badge/version-1.4.0-7C3AED.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-D97706.svg)
 ![Python](https://img.shields.io/badge/python-3.8%20%7C%203.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-2563EB.svg)
 ![License](https://img.shields.io/badge/license-MIT-10B981.svg)
@@ -42,6 +42,7 @@ python run.py
 ### 🔌 接口集成
 
 - [Data] yfinance ✅ - 美股、A股、港股、加密、股指
+- [Data] baostock ✅ - A股与指数历史 K 线（回测；代码格式 `sh.600000` / `sz.000001`）
 - [Data] eastmoney ✅ - 场外基金（指数、QDII、股、债、混合）
 - [Data] miniQMT ✅ - A股、场内ETF、债券（详情见课程实盘章节）
 - [Trade] PaperTrade ✅ - 本地模拟交易、挂单按 Tick 撮合、持仓与订单管理
@@ -88,7 +89,7 @@ deltafstation/
 │   └── app.py        # Flask 入口
 ├── config/
 ├── data/
-│   ├── raw/          # 原始行情 CSV；symbols_dict_*.json 标的目录（miniqmt 需本机 xtdata 维护）
+│   ├── raw/          # 原始行情 CSV；symbols_dict_{yfinance,miniqmt,baostock}.json 标的目录（miniqmt 需本机 xtdata 维护；baostock 为 sh./sz. 原生代码）
 │   ├── results/      # 回测结果 JSON
 │   ├── simulations/  # 账户配置 JSON（含 local_paper 与 broker，统一 SIM_*.json）
 │   └── strategies/   # 策略 Python 文件

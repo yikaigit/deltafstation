@@ -9,6 +9,7 @@ data_cache/
 data/raw/*
 !data/raw/symbols_dict_miniqmt.json
 !data/raw/symbols_dict_yfinance.json
+!data/raw/symbols_dict_baostock.json
 !data/raw/000001.SS.csv
 !data/raw/BTC-USD.csv
 !data/raw/000001.SZ.csv

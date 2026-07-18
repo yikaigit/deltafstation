@@ -19,6 +19,14 @@ class DataManager:
         # 确保文件夹存在
         os.makedirs(self.raw_folder, exist_ok=True)
 
+    @staticmethod
+    def _canonicalize_symbol(symbol: str) -> str:
+        """统一标的代码：baostock 保持 sh./sz. 小写，其余大写。"""
+        s = (symbol or "").strip()
+        if len(s) >= 3 and s[:3].lower() in ("sh.", "sz."):
+            return s.lower()
+        return s.upper()
+
     def _resolve_period_range(self, period):
         """将 period 转为 (start_date, end_date)。"""
         end_date = datetime.now().date()
@@ -45,10 +53,10 @@ class DataManager:
     
     def find_latest_file(self, symbol):
         """查找指定股票代码的最新文件"""
-        symbol = symbol.upper()
+        symbol_u = self._canonicalize_symbol(symbol).upper()
         candidates = []
         for filename in os.listdir(self.raw_folder):
-            if filename.lower().endswith('.csv') and filename.upper().startswith(symbol):
+            if filename.lower().endswith('.csv') and filename.upper().startswith(symbol_u):
                 filepath = os.path.join(self.raw_folder, filename)
                 stat = os.stat(filepath)
                 candidates.append((stat.st_mtime, filename))
@@ -110,17 +118,17 @@ class DataManager:
             end_date: 结束日期（datetime.date 或 str）
             period: 时间周期（如 '1y', 'max'），与 start_date/end_date 二选一
             update_existing: 是否检查并更新已有文件
-            data_source: 数据源，可选 yfinance/miniqmt，默认按旧逻辑自动选择
+            data_source: 数据源，可选 yfinance/miniqmt/baostock，默认按旧逻辑自动选择
             force_refresh: 是否强制刷新（忽略本地范围命中，重新拉取并覆盖）
         
         Returns:
             tuple: (filename, df, status, source) - 文件名、数据框、状态信息、数据源
         """
-        symbol = symbol.upper()
+        symbol = self._canonicalize_symbol(symbol)
         selected_source = (data_source or "yfinance").strip().lower()
-        if selected_source not in {"yfinance", "miniqmt"}:
+        if selected_source not in {"yfinance", "miniqmt", "baostock"}:
             raise ValueError(f"Unsupported data source: {data_source}")
-        fetcher_source = "yahoo" if selected_source == "yfinance" else "miniqmt"
+        fetcher_source = {"yfinance": "yahoo", "miniqmt": "miniqmt", "baostock": "baostock"}[selected_source]
         
         # 转换日期格式
         if start_date and isinstance(start_date, str):

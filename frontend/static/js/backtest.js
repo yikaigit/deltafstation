@@ -265,24 +265,30 @@ function escapeHtml(text) {
 }
 
 function extractSymbolCode(rawValue) {
-    // 兼容 "000001.SS - 上证指数" 这类展示值，提取真实代码用于接口请求。
-    const input = (rawValue || '').trim().toUpperCase();
+    // 兼容 "000001.SS - 上证指数" / "sz.000001 - 平安银行" 展示值，提取真实代码。
+    const input = (rawValue || '').trim();
     if (!input) return '';
-    const match = input.match(/[A-Z0-9]+(?:\.[A-Z]{2,3})/);
-    return match ? match[0] : input.split(/\s|-/)[0];
+    const bsMatch = input.match(/\b(?:sh|sz)\.\d{6}\b/i);
+    if (bsMatch) return bsMatch[0].toLowerCase();
+    const upper = input.toUpperCase();
+    const match = upper.match(/[A-Z0-9]+(?:\.[A-Z]{2,3})/);
+    return match ? match[0] : upper.split(/\s|-/)[0];
 }
 
 function normalizeSymbolItems(items) {
     return (items || []).map(item => {
-        const code = String(item.code || '').trim().toUpperCase();
-        const name = String(item.name || '').trim();
+        let code = String(item.code || '').trim();
         if (!code) return null;
+        // baostock 原生 sh./sz. 保持小写；其余统一大写
+        code = /^(sh|sz)\./i.test(code) ? code.toLowerCase() : code.toUpperCase();
+        const name = String(item.name || '').trim();
         return { code, name };
     }).filter(Boolean);
 }
 
 function normalizeBacktestDataSource(source) {
-    return source === 'miniqmt' ? 'miniqmt' : 'yfinance';
+    if (source === 'miniqmt' || source === 'baostock') return source;
+    return 'yfinance';
 }
 
 function getBacktestDataSource() {
@@ -307,7 +313,7 @@ function renderSymbolSuggestions(rawKeyword = '') {
     }
 
     const filtered = keyword
-        ? source.filter(item => item.code.includes(keyword) || item.name.toUpperCase().includes(keyword))
+        ? source.filter(item => item.code.toUpperCase().includes(keyword) || item.name.toUpperCase().includes(keyword))
         : source;
     const displayItems = filtered.slice(0, 50);
     if (displayItems.length === 0) {
@@ -423,8 +429,9 @@ function bindBacktestDataSourceSwitch() {
 
     sourceSelect.addEventListener('change', async () => {
         const source = getBacktestDataSource();
-        if (source === 'miniqmt' && !symbolInput.value.trim()) {
-            symbolInput.value = '000001.SZ';
+        if (!symbolInput.value.trim()) {
+            if (source === 'baostock') symbolInput.value = 'sz.000001';
+            else if (source === 'miniqmt') symbolInput.value = '000001.SZ';
         }
         await loadSymbolCatalog();
         renderSymbolSuggestions(symbolInput.value);
@@ -629,7 +636,7 @@ function getBacktestParams() {
     return {
         strategyId: currentStrategy?.id,
         symbol: normalizedSymbol,
-        dataSource: $('backtestDataSource')?.value || 'yfinance',
+        dataSource: getBacktestDataSource(),
         startDate: $('backtestStartDate')?.value || '',
         endDate: $('backtestEndDate')?.value || '',
         initialCapital: parseFloat($('backtestInitialCapital')?.value || 100000),

@@ -19,6 +19,7 @@ pytz>=2023.3
 
 # Market data
 yfinance>=0.2.54 # fix too many requests error
+baostock
 
 # Visualization
 matplotlib>=3.8,<4
@@ -32,7 +33,7 @@ requests>=2.31.0,<3
 openai>=1.40.0
 
 # Project core
-deltafq>=1.0.2
+deltafq>=1.1.0
 # deltafq.indicators 会 import talib，PyPI 包名为 TA-Lib
 TA-Lib>=0.4.24
 

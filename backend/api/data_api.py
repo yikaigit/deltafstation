@@ -238,12 +238,13 @@ def get_symbol_catalog():
     try:
         dm = get_data_manager()
         source = (request.args.get('source') or '').strip().lower()
-        if source not in {'yfinance', 'miniqmt'}:
+        if source not in {'yfinance', 'miniqmt', 'baostock'}:
             source = 'yfinance'
 
         source_file_map = {
             'miniqmt': 'symbols_dict_miniqmt.json',
             'yfinance': 'symbols_dict_yfinance.json',
+            'baostock': 'symbols_dict_baostock.json',
         }
         symbol_dict_file = os.path.join(dm.raw_folder, source_file_map[source])
         if not os.path.exists(symbol_dict_file):
