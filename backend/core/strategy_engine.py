@@ -93,7 +93,10 @@ class StrategyEngine:
         qmt_path: Optional[str] = None,
         broker_account: Optional[str] = None,
     ) -> None:
-        """启动指定账户的策略引擎；broker 走 miniQMT 双网关，paper 走 yfinance + paper。"""
+        """启动指定账户的策略引擎；broker 走 miniQMT 双网关，paper 走 baostock + paper。
+
+        注意：baostock 网关轮询 5 分钟 K 线，盘中通常不刷新，paper 行情非实时。
+        """
         if account_id in cls._runs:
             cls.stop(account_id)
 
@@ -141,10 +144,10 @@ class StrategyEngine:
                 interval=interval,
                 lookback_bars=lookback_bars,
                 signal_interval=signal_interval,
-                data_gateway_name="yfinance",
+                data_gateway_name="baostock",
                 trade_gateway_name="paper",
             )
-            engine.set_data_gateway("yfinance", interval=interval)
+            engine.set_data_gateway("baostock", interval=interval)
             engine.set_trade_gateway("paper", initial_capital=initial_capital, commission=commission)
             if getattr(engine, "_ensure_gateways", None):
                 engine._ensure_gateways()

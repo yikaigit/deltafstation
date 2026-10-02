@@ -29,7 +29,7 @@ SourceLiveDataManager 方法说明：
 
 MultiSourceLiveDataManager 方法说明：
 公开方法：
-  normalize_source  归一化 source（非法值默认 yfinance）。
+  normalize_source  归一化 source（非法值默认 baostock）。
   start             启动全部 source 的网关。
   stop              停止全部 source 的网关。
   subscribe         按 source 将订阅请求路由到对应运行态。
@@ -80,10 +80,10 @@ class SourceLiveDataManager:
     FAIL_BACKOFF_MAX = _env_float("DFS_LIVE_FAIL_BACKOFF_MAX", 300, 1)
     FAIL_BACKOFF_MAX_POW = 4
 
-    WARMUP_SOURCES = {"yf_warmup", "miniqmt_warmup"}
+    WARMUP_SOURCES = {"yf_warmup", "miniqmt_warmup", "baostock_warmup"}
     REALTIME_MINIQMT_SOURCES = {"miniqmt", "miniqmt_push"}
 
-    def __init__(self, source: str = "yfinance"):
+    def __init__(self, source: str = "baostock"):
         self.event_engine = EventEngine()
         self.latest_ticks: Dict[str, dict] = {}
         self.history_ticks: Dict[str, list] = {}
@@ -92,9 +92,10 @@ class SourceLiveDataManager:
         self.ohlc_last_update: Dict[str, float] = {}
         self.depth_cache: Dict[str, dict] = {}
         self.depth_last_update: Dict[str, float] = {}
-        self.data_source = (source or "yfinance").strip().lower()
+        self.data_source = (source or "baostock").strip().lower()
         self._gateway_params = {
-            "yfinance": {"interval": _env_float("DFS_LIVE_YF_INTERVAL", 5, 1)},
+            # baostock 网关轮询 5 分钟 K 线，盘中不刷新，默认 60s 轮询即可
+            "baostock": {"interval": _env_float("DFS_LIVE_BS_INTERVAL", 60, 1)},
             "miniqmt": {"interval": _env_float("DFS_LIVE_MINIQMT_INTERVAL", 5, 1), "mode": "poll"},
         }
         self._lock = threading.Lock()
@@ -418,18 +419,18 @@ class SourceLiveDataManager:
 class MultiSourceLiveDataManager:
     """按 source 路由到独立运行态。"""
 
-    SUPPORTED_SOURCES = {"yfinance", "miniqmt"}
+    SUPPORTED_SOURCES = {"baostock", "miniqmt"}
 
     def __init__(self):
         self._managers: Dict[str, SourceLiveDataManager] = {
-            "yfinance": SourceLiveDataManager("yfinance"),
+            "baostock": SourceLiveDataManager("baostock"),
             "miniqmt": SourceLiveDataManager("miniqmt"),
         }
 
     @classmethod
     def normalize_source(cls, source: str = None) -> str:
         s = (source or "").strip().lower()
-        return s if s in cls.SUPPORTED_SOURCES else "yfinance"
+        return s if s in cls.SUPPORTED_SOURCES else "baostock"
 
     def _pick_manager(self, source: str = None) -> SourceLiveDataManager:
         selected = self.normalize_source(source)

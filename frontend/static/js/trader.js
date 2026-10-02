@@ -30,7 +30,7 @@ const TraderApp = {
         symbolSuggestionIndex: -1,
         currentChartType: 'intraday',
         currentIndicator: 'ma',
-        currentDataSource: 'yfinance',
+        currentDataSource: 'baostock',
         timers: {
             account: null,
             market: null,
@@ -287,14 +287,14 @@ const TraderApp = {
         },
 
         normalizeDataSource(source) {
-            return source === 'miniqmt' ? 'miniqmt' : 'yfinance';
+            return source === 'miniqmt' ? 'miniqmt' : 'baostock';
         },
 
         applySourceSwitchUI(source) {
             const current = this.normalizeDataSource(source);
-            const yfBtn = $('dataSourceYfinance');
+            const bsBtn = $('dataSourceBaostock');
             const qmtBtn = $('dataSourceMiniqmt');
-            if (yfBtn) yfBtn.classList.toggle('active', current === 'yfinance');
+            if (bsBtn) bsBtn.classList.toggle('active', current === 'baostock');
             if (qmtBtn) qmtBtn.classList.toggle('active', current === 'miniqmt');
         },
 
@@ -730,7 +730,7 @@ const TraderApp = {
         },
 
         /** 初始化分时图：时间轴、价格/均价/成交量数据集与 Chart 实例。 */
-        initIntraday(symbol = 'BTC-USD') {
+        initIntraday(symbol = 'sh.600000') {
             const canvas = $('intradayChart');
             if (!canvas || typeof Chart === 'undefined') return;
 

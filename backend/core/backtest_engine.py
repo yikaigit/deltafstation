@@ -8,10 +8,18 @@ from deltafq.backtest import BacktestEngine as DeltaFqBacktestEngine
 from deltafq.strategy.base import BaseStrategy
 
 from backend.core.utils.strategy_loader import load_strategy_class
+from backend.core.adjustment import AdjustmentStore
 
 # 路径常量
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-_DATA_RAW_FOLDER = os.path.join(_BASE_DIR, "data", "raw")
+_DATA_FOLDER = os.path.join(_BASE_DIR, "data")
+_DATA_RAW_FOLDER = os.path.join(_DATA_FOLDER, "raw")
+
+#: 回测默认复权口径。
+#: 后复权价 = 不复权价 × backAdjustFactor，只依赖截至当日的除权事件，
+#: **点-in-time 天然安全**；前复权要除以「最新因子」，天然带未来函数，
+#: 只能用于图表展示，绝不能进回测。详见 docs/data-source-and-adjustment.md
+DEFAULT_ADJUST_MODE = "back"
 
 
 class BacktestEngine:
@@ -103,6 +111,8 @@ class BacktestEngine:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         symbol: Optional[str] = None,
+        adjust: str = DEFAULT_ADJUST_MODE,
+        add_raw_columns: bool = False,
     ) -> tuple[pd.DataFrame, str]:
         """
         加载并预处理数据
@@ -112,6 +122,9 @@ class BacktestEngine:
             start_date: 起始日期（可选）
             end_date: 结束日期（可选）
             symbol: 标的代码（可选，默认从文件名解析）
+            adjust: 复权口径，back（默认，点-in-time 安全）/ forward / none
+            add_raw_columns: 是否额外保留 RawOpen/RawHigh/RawLow/RawClose 不复权列。
+                涨跌停判断、真实价展示、成交额类指标须用不复权价，需要时开启。
             
         Returns:
             tuple: (处理后的 DataFrame, symbol)
@@ -153,8 +166,45 @@ class BacktestEngine:
         # 验证必要列
         if "Close" not in df.columns:
             raise ValueError("Data must contain 'Close' column")
-        
+
+        # 复权：本地 data/raw 存的始终是**不复权**价，回测主价格序列用后复权价。
+        # 先按日期区间过滤再复权，因子视野天然截止到区间末日（点-in-time）。
+        df = BacktestEngine._apply_adjustment(
+            df, symbol, mode=adjust, add_raw_columns=add_raw_columns)
+
         return df, symbol
+
+    @staticmethod
+    def _apply_adjustment(df: pd.DataFrame, symbol: str, mode: str = DEFAULT_ADJUST_MODE,
+                          add_raw_columns: bool = False) -> pd.DataFrame:
+        """按指定口径复权（事件表缺失时原样返回，不阻断回测）。"""
+        if not mode or mode == "none":
+            return df
+        try:
+            store = AdjustmentStore(_DATA_FOLDER)
+            events = store.load_events(symbol)
+            if events is None:
+                # 无事件表：可能是未拉过因子的历史文件。后复权价退化为不复权价，
+                # 回测仍可跑但收益率不含分红，明确告警而不是静默出错。
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"No adjust events for {symbol}; backtest runs on unadjusted prices. "
+                    f"Run scripts/fetch_all.py to fetch the event table.")
+                return df
+            if add_raw_columns:
+                for col in ("Open", "High", "Low", "Close"):
+                    if col in df.columns:
+                        df[f"Raw{col}"] = df[col]
+            work = df.reset_index()
+            if "Date" not in work.columns and "index" in work.columns:
+                work = work.rename(columns={"index": "Date"})
+            adjusted = store.apply(work, symbol, mode=mode, events=events)
+            return adjusted.set_index("Date")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Failed to apply adjustment for {symbol}: {e}; using unadjusted prices")
+            return df
 
     def run_backtest_from_file(
         self,

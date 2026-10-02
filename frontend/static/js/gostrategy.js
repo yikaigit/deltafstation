@@ -43,7 +43,7 @@ const GoStrategyApp = {
         monitorMarketData: {},
         symbolCatalogItems: [],
         symbolSuggestionIndex: -1,
-        symbolDataSource: 'yfinance',
+        symbolDataSource: 'baostock',
         timers: { refresh: null, clock: null }
     },
 
@@ -62,12 +62,12 @@ const GoStrategyApp = {
         return (sim?.account_type || '').toLowerCase() === 'broker';
     },
 
-    /** 投资标的：目录与联想（QMT / YF 随账户切换，逻辑对齐 trader 页）。 */
+    /** 投资标的：目录与联想（QMT / BS 随账户切换，逻辑对齐 trader 页）。 */
     symbol: {
         dataSource() {
             const id = $('runAccountSelect')?.value;
             const acc = GoStrategyApp.state.allSimulations.find(s => s.id === id);
-            return GoStrategyApp.isBrokerAccount(acc) ? 'miniqmt' : 'yfinance';
+            return GoStrategyApp.isBrokerAccount(acc) ? 'miniqmt' : 'baostock';
         },
 
         extractCode(raw) {
@@ -83,7 +83,7 @@ const GoStrategyApp = {
         },
 
         async loadCatalog(source) {
-            const src = source === 'miniqmt' ? 'miniqmt' : 'yfinance';
+            const src = source === 'miniqmt' ? 'miniqmt' : 'baostock';
             GoStrategyApp.state.symbolDataSource = src;
             const { ok, data } = await apiRequest(`/api/data/symbols/catalog?source=${encodeURIComponent(src)}`);
             if (ok && Array.isArray(data?.items)) {
@@ -138,7 +138,7 @@ const GoStrategyApp = {
 
         async onAccountSelect(account) {
             const isBroker = GoStrategyApp.isBrokerAccount(account);
-            const src = isBroker ? 'miniqmt' : 'yfinance';
+            const src = isBroker ? 'miniqmt' : 'baostock';
             const input = $('runSymbol');
             const nameEl = $('runSymbolName');
             if (GoStrategyApp.state.symbolDataSource !== src) {
@@ -1207,7 +1207,7 @@ const GoStrategyApp = {
                 GoStrategyApp.display.updateDisplay();
                 const symbol = run.symbol || $('runSymbol')?.value?.trim();
                 if (symbol) {
-                    const liveSource = GoStrategyApp.isBrokerAccount(run) ? 'miniqmt' : 'yfinance';
+                    const liveSource = GoStrategyApp.isBrokerAccount(run) ? 'miniqmt' : 'baostock';
                     const { ok: qOk, data: quote } = await apiRequest(
                         `/api/data/live/${encodeURIComponent(symbol)}?source=${liveSource}`
                     );

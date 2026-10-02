@@ -286,13 +286,21 @@ function normalizeSymbolItems(items) {
     }).filter(Boolean);
 }
 
+/**
+ * 回测基准指数（baostock 代码格式）。
+ * 目前固定上证指数 sh.000001；后续要换成沪深300 等，改这里即可。
+ * 注意：指数没有复权因子（baostock query_adjust_factor 返回 0 行），
+ * 后复权价 == 不复权价，基准对比天然正确。
+ */
+const BENCHMARK_SYMBOL = 'sh.000001';
+
 function normalizeBacktestDataSource(source) {
     if (source === 'miniqmt' || source === 'baostock') return source;
-    return 'yfinance';
+    return 'baostock';
 }
 
 function getBacktestDataSource() {
-    return normalizeBacktestDataSource($('backtestDataSource')?.value || 'yfinance');
+    return normalizeBacktestDataSource($('backtestDataSource')?.value || 'baostock');
 }
 
 function hideSymbolSuggestions() {
@@ -645,7 +653,7 @@ function getBacktestParams() {
     };
 }
 
-async function syncMarketData(symbol, startDate, endDate, dataSource = 'yfinance', silent = false) {
+async function syncMarketData(symbol, startDate, endDate, dataSource = 'baostock', silent = false) {
     // 传了数据源时走后端强制刷新，确保按当前选中源拉取最新数据。
     const shouldForceRefresh = !!dataSource;
 
@@ -825,7 +833,7 @@ function formatCurrency(value) {
 
 let charts = { priceTrend: null, equity: null, drawdown: null, dailyReturn: null, pnlDist: null };
 
-async function getBenchmarkNormalizedData(symbol, rawDates, dataSource = 'yfinance') {
+async function getBenchmarkNormalizedData(symbol, rawDates, dataSource = 'baostock') {
     if (!rawDates || rawDates.length === 0) return null;
     
     const startDate = rawDates[0];
@@ -921,16 +929,16 @@ async function drawBacktestCharts(results) {
     const { rawDates, dates } = normalizeBacktestDates(results, portfolioValues);
     
     const initialCapital = results.initial_capital || portfolioValues[0] || 100000;
-    const dataSource = results.data_source || $('backtestDataSource')?.value || 'yfinance';
+    const dataSource = results.data_source || $('backtestDataSource')?.value || 'baostock';
     const dailyReturnRawDates = rawDates.slice(1);
     const dailyReturnDates = generateMonthLabels(dailyReturnRawDates);
     
-    // 获取 000001.SS 作为 Benchmark
-    const benchmarkData = await getBenchmarkNormalizedData('000001.SS', rawDates, dataSource);
+    // 获取上证指数 sh.000001 作为 Benchmark（baostock 代码格式）
+    const benchmarkData = await getBenchmarkNormalizedData(BENCHMARK_SYMBOL, rawDates, dataSource);
     
     // 获取投资标的本身的归一化价格 (Underlying Asset)
     let underlyingData = null;
-    if (results.symbol && results.symbol.toUpperCase() !== '000001.SS') {
+    if (results.symbol && results.symbol.toUpperCase() !== BENCHMARK_SYMBOL.toUpperCase()) {
         underlyingData = await getBenchmarkNormalizedData(results.symbol, rawDates, dataSource);
     }
     
@@ -1005,7 +1013,7 @@ function drawPriceTrendChart(dates, rawDates = null, benchmarkData = null, under
 
     // 增加基准线 (上证指数)
     datasets.push({
-        label: benchmarkData ? '基准 (000001.SS)' : '基准',
+        label: benchmarkData ? `基准 (${BENCHMARK_SYMBOL})` : '基准',
         data: benchmarkData || dates.map(() => 1),
         borderColor: 'rgba(108, 117, 125, 0.5)', // 降低饱和度的灰色
         borderWidth: 1.5,

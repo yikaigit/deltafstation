@@ -86,7 +86,8 @@ class SimulationEngine:
             return
 
         event_engine = EventEngine()
-        data_gw = create_data_gateway("yfinance", interval=5.0)
+        # baostock 网关轮询 5 分钟 K 线（盘中不刷新，非实时），60s 轮询足够
+        data_gw = create_data_gateway("baostock", interval=60.0)
         trade_gw = create_trade_gateway("paper", initial_capital=initial_capital, commission=commission)
         if not trade_gw.connect() or not data_gw.connect():
             raise RuntimeError("gateway connect failed")

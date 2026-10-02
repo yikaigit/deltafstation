@@ -11,7 +11,8 @@ Server injects this block for backtest-related user messages (keyword gating is 
 
 ## Data
 
-Market data uses **yfinance**; pass `symbol` as a yfinance ticker (e.g. `000001.SS`, `AAPL`, `GLD`).
+Market data uses **baostock** (A-share only); pass `symbol` as a baostock code (e.g. `sh.600000`, `sz.000001`; index `sh.000001`).
+Data is stored **unadjusted**; backtests run on **back-adjusted** prices computed from the dividend/split event table (point-in-time safe).
 
 ## Dates
 

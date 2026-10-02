@@ -17,7 +17,7 @@ import io
 import json
 import pandas as pd
 from datetime import datetime
-from backend.core.data_manager import DataManager
+from backend.core.data_manager import DataManager, DEFAULT_SOURCE, SUPPORTED_SOURCES
 from backend.core.live_data_manager import live_data_manager
 
 data_bp = Blueprint('data', __name__)
@@ -211,7 +211,10 @@ def download_template():
 
 @data_bp.route('/live/<symbol>', methods=['GET'])
 def get_live_quote(symbol):
-    """获取实时行情 - GET /api/data/live/<symbol>?source=yfinance|miniqmt&history=true|false"""
+    """获取实时行情 - GET /api/data/live/<symbol>?source=baostock|miniqmt&history=true|false
+
+    注意：baostock 网关轮询 5 分钟 K 线，盘中通常不刷新，结果非实时。
+    """
     try:
         source = live_data_manager.normalize_source(request.args.get('source'))
         include_history = request.args.get('history', 'false').lower() == 'true'
@@ -238,12 +241,11 @@ def get_symbol_catalog():
     try:
         dm = get_data_manager()
         source = (request.args.get('source') or '').strip().lower()
-        if source not in {'yfinance', 'miniqmt', 'baostock'}:
-            source = 'yfinance'
+        if source not in SUPPORTED_SOURCES:
+            source = DEFAULT_SOURCE
 
         source_file_map = {
             'miniqmt': 'symbols_dict_miniqmt.json',
-            'yfinance': 'symbols_dict_yfinance.json',
             'baostock': 'symbols_dict_baostock.json',
         }
         symbol_dict_file = os.path.join(dm.raw_folder, source_file_map[source])

@@ -40,7 +40,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "handler": handle_run_backtest,
         "description": (
             "执行策略回测。优先在用户明确提出回测时调用。"
-            "行情数据默认经 yfinance 拉取（与项目 DataManager 一致）。"
+            "行情数据默认经 baostock 拉取（与项目 DataManager 一致）。"
             "必填参数 strategy_id 和 data_file 支持模糊匹配："
             "strategy_id 按关键词匹配且忽略大小写；data_file 优先按投资标的代码匹配。"
             "若匹配结果不唯一，返回候选列表并要求进一步确认。"
@@ -52,7 +52,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "strategy_id": {"type": "string", "description": "策略 ID 或关键词，例如 boll、every2bar"},
                 "data_file": {
                     "type": "string",
-                    "description": "数据文件名或 yfinance 标的代码，例如 000001.SS、GLD、000001.SS.csv",
+                    "description": "数据文件名或 baostock 标的代码，例如 sh.600000、sz.000001、sh.600000.csv（指数如 sh.000001）",
                 },
                 "start_date": {"type": "string", "description": "可选，起始日期，建议 YYYY-MM-DD"},
                 "end_date": {"type": "string", "description": "可选，结束日期，建议 YYYY-MM-DD"},
@@ -90,14 +90,14 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "handler": handle_run_backtest_auto,
         "description": (
             "自动回测工具：仅需 symbol 即可先拉取/复用数据，再执行回测。"
-            "行情默认经 yfinance 拉取（与项目 DataManager 一致）。"
+            "行情默认经 baostock 拉取（与项目 DataManager 一致）。"
             "strategy_id 可选，缺省使用 BOLLStrategy；该类须已在 data/strategies 中存在。"
             "自定义策略请先调用 ensure_strategy 写入源码；本工具不会自动生成占位策略。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "symbol": {"type": "string", "description": "yfinance 标的代码，例如 000001.SS、AAPL、GLD"},
+                "symbol": {"type": "string", "description": "baostock 标的代码，例如 sh.600000、sz.000001（指数如 sh.000001）"},
                 "strategy_id": {"type": "string", "description": "可选，策略类名；缺省使用 BOLLStrategy"},
                 "start_date": {"type": "string", "description": "可选，起始日期，建议 YYYY-MM-DD"},
                 "end_date": {"type": "string", "description": "可选，结束日期，建议 YYYY-MM-DD"},

@@ -8,11 +8,13 @@ data_cache/
 !data/raw/
 data/raw/*
 !data/raw/symbols_dict_miniqmt.json
-!data/raw/symbols_dict_yfinance.json
 !data/raw/symbols_dict_baostock.json
-!data/raw/000001.SS.csv
-!data/raw/BTC-USD.csv
-!data/raw/000001.SZ.csv
+# yfinance 遗留样本已归档到 data/raw/_legacy_yfinance/（不再入库）
+data/raw/_legacy_yfinance/
+# 复权事件表与落盘元数据：随数据量增长，按白名单只放行目录本身
+data/adjust/
+data/meta/
+data/quality/
 
 # Python
 __pycache__/
