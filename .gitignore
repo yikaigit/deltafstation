@@ -85,3 +85,6 @@ htmlcov/
 *.bak
 *.orig
 
+# WorkBuddy AI 工作目录（本地辅助数据，不入库）
+.workbuddy-ai/
+

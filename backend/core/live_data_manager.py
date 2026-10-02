@@ -6,7 +6,7 @@
 
 SourceLiveDataManager 方法说明：
 公开方法：
-  start            启动当前数据网关。
+  start            启动当前数据网关；连接失败时不启动轮询线程，返回是否真正启动。
   stop             停止网关并清空订阅集合。
   get_data_source  返回当前数据源标识。
   set_data_source  切换数据源并迁移原订阅标的，返回 (成功标记, 信息)。
@@ -18,10 +18,13 @@ SourceLiveDataManager 方法说明：
   _minute_context      计算 tick 的基准时间与 minute 字符串。
   _time_offset         按市场/来源返回 minute 展示时区偏移。
   _create_gateway      按 source 创建网关并绑定 tick 回调。
-  _clear_runtime_state 清空订阅、tick、OHLC 与 depth 缓存状态。
+  _clear_runtime_state 清空订阅、tick、缓存与失败退避状态。
   _apply_cached        将命中的缓存字段写回响应数据。
-  _update_ohlc_cache   刷新/复用 OHLC 缓存（TTL）。
-  _update_depth_cache  刷新/复用五档缓存（TTL）。
+  _next_retry_delay    按连续失败次数返回退避秒数（指数递增并封顶）。
+  _mark_success        拉取成功：写缓存、刷时间戳并重置失败计数。
+  _mark_failure        拉取失败：刷时间戳并进入指数退避，避免越限流打得越猛。
+  _update_ohlc_cache   刷新/复用 OHLC 缓存（TTL + 失败退避）。
+  _update_depth_cache  刷新/复用五档缓存（TTL + 失败退避）。
   _parse_depth_rows    将五档原始行标准化为 [price, volume]。
 
 MultiSourceLiveDataManager 方法说明：
@@ -37,6 +40,7 @@ MultiSourceLiveDataManager 方法说明：
 """
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -48,11 +52,34 @@ from deltafq.live.gateway_registry import create_data_gateway
 logger = logging.getLogger(__name__)
 
 
+def _env_float(name: str, default: float, minimum: float) -> float:
+    """读取环境变量浮点配置，非法或非正值回退默认值。"""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(f"Invalid float for {name}: {raw!r}, fallback to {default}")
+        return default
+    return value if value >= minimum else default
+
+
 class SourceLiveDataManager:
     """单一 source 的实时行情运行态。"""
 
-    OHLC_TTL = 60
-    DEPTH_TTL = 3
+    # 缓存 TTL（秒）：命中时直接复用，不发起请求。
+    OHLC_TTL = _env_float("DFS_LIVE_OHLC_TTL", 60, 1)
+    DEPTH_TTL = _env_float("DFS_LIVE_DEPTH_TTL", 3, 1)
+
+    # 失败退避（秒）：连续失败时按 2^n 递增并封顶。
+    # 背景：早期实现只在成功时刷新 *_last_update，一旦上游限流，TTL 永不命中，
+    # 每次前端轮询都会直接打上游（OHLC 从 1 次/分放大到 12 次/分），形成「越限流打得越猛」的雪崩。
+    OHLC_FAIL_BACKOFF = _env_float("DFS_LIVE_OHLC_FAIL_BACKOFF", 60, 1)
+    DEPTH_FAIL_BACKOFF = _env_float("DFS_LIVE_DEPTH_FAIL_BACKOFF", 15, 1)
+    FAIL_BACKOFF_MAX = _env_float("DFS_LIVE_FAIL_BACKOFF_MAX", 300, 1)
+    FAIL_BACKOFF_MAX_POW = 4
+
     WARMUP_SOURCES = {"yf_warmup", "miniqmt_warmup"}
     REALTIME_MINIQMT_SOURCES = {"miniqmt", "miniqmt_push"}
 
@@ -67,11 +94,17 @@ class SourceLiveDataManager:
         self.depth_last_update: Dict[str, float] = {}
         self.data_source = (source or "yfinance").strip().lower()
         self._gateway_params = {
-            "yfinance": {"interval": 5},
-            "miniqmt": {"interval": 5, "mode": "poll"},
+            "yfinance": {"interval": _env_float("DFS_LIVE_YF_INTERVAL", 5, 1)},
+            "miniqmt": {"interval": _env_float("DFS_LIVE_MINIQMT_INTERVAL", 5, 1), "mode": "poll"},
         }
         self._lock = threading.Lock()
         self.gateway = None
+
+        # 连续失败计数与退避到期时刻（source 切换时随缓存一起清空）。
+        self.ohlc_fail_count: Dict[str, int] = {}
+        self.depth_fail_count: Dict[str, int] = {}
+        self.ohlc_next_retry: Dict[str, float] = {}
+        self.depth_next_retry: Dict[str, float] = {}
 
         # 统一由事件引擎转发 tick，便于后续扩展多个事件消费者。
         self.event_engine.on(EVENT_TICK, self._on_tick)
@@ -84,16 +117,33 @@ class SourceLiveDataManager:
             self.gateway = None
 
     # ==================== Public APIs ====================
-    def start(self):
-        """启动当前网关。"""
-        if self.gateway:
-            self.gateway.connect()
-            self.gateway.start()
+    def start(self) -> bool:
+        """启动当前网关；连接失败时不起轮询线程，返回是否真正启动。
+
+        早期实现忽略 ``connect()`` 的返回值，导致 miniqmt 在 xtquant 缺失时
+        仍起后台轮询线程空转刷错误日志。
+        """
+        if not self.gateway:
+            logger.warning(f"Skip starting {self.data_source}: gateway unavailable")
+            return False
+        try:
+            connected = self.gateway.connect()
+        except Exception as e:
+            logger.error(f"Failed to connect {self.data_source} gateway: {e}")
+            return False
+        if connected is False:
+            logger.warning(f"Skip starting {self.data_source}: gateway connect failed")
+            return False
+        self.gateway.start()
+        return True
 
     def stop(self):
         """停止当前网关并清空订阅集合。"""
         if self.gateway:
-            self.gateway.stop()
+            try:
+                self.gateway.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping {self.data_source} gateway: {e}")
         with self._lock:
             self.subscribed_symbols.clear()
 
@@ -237,7 +287,7 @@ class SourceLiveDataManager:
         return gateway
 
     def _clear_runtime_state(self):
-        """清空订阅与缓存状态（用于切换数据源前）。"""
+        """清空订阅、缓存与失败退避状态（用于切换数据源前）。"""
         self.subscribed_symbols.clear()
         self.latest_ticks.clear()
         self.history_ticks.clear()
@@ -245,6 +295,10 @@ class SourceLiveDataManager:
         self.ohlc_last_update.clear()
         self.depth_cache.clear()
         self.depth_last_update.clear()
+        self.ohlc_fail_count.clear()
+        self.depth_fail_count.clear()
+        self.ohlc_next_retry.clear()
+        self.depth_next_retry.clear()
 
     @staticmethod
     def _apply_cached(cache: Dict[str, dict], symbol: str, data: dict):
@@ -253,50 +307,98 @@ class SourceLiveDataManager:
         if cached:
             data.update(cached)
 
-    def _update_ohlc_cache(self, symbol: str, data: dict):
-        """刷新/复用 OHLC 缓存（60 秒 TTL）。"""
-        current_time = time.time()
-        last_update = self.ohlc_last_update.get(symbol, 0)
+    def _next_retry_delay(self, fail_count: int, base: float) -> float:
+        """按连续失败次数返回退避秒数（指数递增并封顶）。"""
+        exponent = min(max(fail_count - 1, 0), self.FAIL_BACKOFF_MAX_POW)
+        return min(base * (2 ** exponent), self.FAIL_BACKOFF_MAX)
 
-        # Step 1: TTL 命中时直接复用缓存。
-        if current_time - last_update <= self.OHLC_TTL:
+    @staticmethod
+    def _mark_success(cache, last_update, fail_count, next_retry, symbol, payload, current_time):
+        """拉取成功：写缓存、刷新时间戳并重置失败计数。"""
+        cache[symbol] = payload
+        last_update[symbol] = current_time
+        fail_count.pop(symbol, None)
+        next_retry.pop(symbol, None)
+
+    def _mark_failure(self, last_update, fail_count, next_retry, symbol, base, current_time, label):
+        """拉取失败：刷新时间戳并进入指数退避，随后由调用方回退旧缓存。"""
+        fail_count[symbol] = fail_count.get(symbol, 0) + 1
+        last_update[symbol] = current_time
+        next_retry[symbol] = current_time + self._next_retry_delay(fail_count[symbol], base)
+        logger.warning(
+            f"{label} fetch failed for {symbol} "
+            f"(consecutive={fail_count[symbol]}, retry after {self._next_retry_delay(fail_count[symbol], base):.0f}s)"
+        )
+
+    def _update_ohlc_cache(self, symbol: str, data: dict):
+        """刷新/复用 OHLC 缓存（TTL + 失败指数退避）。"""
+        current_time = time.time()
+
+        # Step 1: 退避窗口内或 TTL 命中时直接复用缓存。
+        if current_time < self.ohlc_next_retry.get(symbol, 0):
+            self._apply_cached(self.ohlc_cache, symbol, data)
+            return
+        if current_time - self.ohlc_last_update.get(symbol, 0) <= self.OHLC_TTL:
             self._apply_cached(self.ohlc_cache, symbol, data)
             return
 
-        # Step 2: TTL 过期时拉新，失败则回退旧值。
-        ohlc = self.gateway.get_today_ohlc(symbol) if self.gateway else None
+        # Step 2: TTL 过期时拉新；成功落缓存，失败刷新时间戳并退避。
+        ohlc = None
+        if self.gateway:
+            try:
+                ohlc = self.gateway.get_today_ohlc(symbol)
+            except Exception as e:
+                logger.warning(f"Error fetching OHLC for {symbol}: {e}")
         if ohlc:
-            self.ohlc_cache[symbol] = ohlc
-            self.ohlc_last_update[symbol] = current_time
+            self._mark_success(
+                self.ohlc_cache, self.ohlc_last_update, self.ohlc_fail_count,
+                self.ohlc_next_retry, symbol, ohlc, current_time,
+            )
             data.update(ohlc)
             return
+        self._mark_failure(
+            self.ohlc_last_update, self.ohlc_fail_count, self.ohlc_next_retry,
+            symbol, self.OHLC_FAIL_BACKOFF, current_time, "OHLC",
+        )
         self._apply_cached(self.ohlc_cache, symbol, data)
 
     def _update_depth_cache(self, symbol: str, data: dict):
-        """刷新/复用五档缓存（3 秒 TTL）。"""
+        """刷新/复用五档缓存（TTL + 失败指数退避）。"""
         if not self.gateway:
             return
 
         current_time = time.time()
-        last_update = self.depth_last_update.get(symbol, 0)
 
-        # Step 1: TTL 命中时直接复用缓存。
-        if current_time - last_update <= self.DEPTH_TTL:
+        # Step 1: 退避窗口内或 TTL 命中时直接复用缓存。
+        if current_time < self.depth_next_retry.get(symbol, 0):
+            self._apply_cached(self.depth_cache, symbol, data)
+            return
+        if current_time - self.depth_last_update.get(symbol, 0) <= self.DEPTH_TTL:
             self._apply_cached(self.depth_cache, symbol, data)
             return
 
-        # Step 2: TTL 过期时拉新并标准化结构，异常时回退旧值。
+        # Step 2: TTL 过期时拉新并标准化结构；失败刷新时间戳并退避。
+        parsed = None
         try:
             depths = self.gateway.get_depths(symbol, levels=5) or {}
             asks = self._parse_depth_rows(depths.get("asks") or [])
             bids = self._parse_depth_rows(depths.get("bids") or [])
             if asks or bids:
-                self.depth_cache[symbol] = {"asks": asks, "bids": bids}
-                self.depth_last_update[symbol] = current_time
-                data.update(self.depth_cache[symbol])
-                return
+                parsed = {"asks": asks, "bids": bids}
         except Exception as e:
             logger.warning(f"Error fetching depth for {symbol}: {e}")
+
+        if parsed:
+            self._mark_success(
+                self.depth_cache, self.depth_last_update, self.depth_fail_count,
+                self.depth_next_retry, symbol, parsed, current_time,
+            )
+            data.update(parsed)
+            return
+        self._mark_failure(
+            self.depth_last_update, self.depth_fail_count, self.depth_next_retry,
+            symbol, self.DEPTH_FAIL_BACKOFF, current_time, "Depth",
+        )
         self._apply_cached(self.depth_cache, symbol, data)
 
     @staticmethod

@@ -2,6 +2,7 @@
 数据管理模块
 """
 import os
+import threading
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -11,7 +12,11 @@ from deltafq.data import DataFetcher
 
 class DataManager:
     """数据管理器"""
-    
+
+    # 拉取串行锁：baostock 依赖全局单连接（每次拉取都 login/logout），
+    # 并发调用会互相踩连接并触发服务端异常，故用类级锁串行化所有拉取。
+    _FETCH_LOCK = threading.RLock()
+
     def __init__(self, data_folder):
         self.data_folder = data_folder
         self.raw_folder = os.path.join(data_folder, 'raw')
@@ -97,6 +102,29 @@ class DataManager:
             pass
         return (datetime.now() - timedelta(days=365*20)).date()
     
+    def _merge_with_local(self, df, latest_file):
+        """用新数据覆盖同日期旧行，保留本地其余历史。
+
+        早期实现直接用本次拉取结果覆盖 ``SYMBOL.csv``：若用户请求一个更窄的区间，
+        已有的长历史会被静默截断（例如先拉全量、再拉单日，文件只剩一行）。
+        """
+        filepath = os.path.join(self.raw_folder, latest_file)
+        try:
+            old = pd.read_csv(filepath)
+        except Exception:
+            return df
+        if old.empty or 'Date' not in old.columns:
+            return df
+
+        old = self._standardize_dataframe(old)
+        merged = pd.concat([old, df], ignore_index=True)
+        # keep='last'：新数据在后，同日期以新数据为准（可修正历史脏数据）
+        merged = merged.drop_duplicates(subset=['Date'], keep='last')
+        merged = merged.sort_values('Date').reset_index(drop=True)
+        # 列序以本次结果为准，本地多出的列（如 Adj Close）保留在末尾
+        columns = list(df.columns) + [c for c in old.columns if c not in df.columns]
+        return merged.reindex(columns=columns)
+
     def _get_file_date_range(self, filename):
         """从文件中获取日期范围"""
         try:
@@ -167,15 +195,16 @@ class DataManager:
                 end_date = datetime.now().date()
             status = "downloaded_full"
         
-        # 3. 获取数据
+        # 3. 获取数据（串行化，避免并发踩坏 baostock 全局连接）
         try:
             fetcher = DataFetcher(source=fetcher_source)
-            df = fetcher.fetch_data(
-                symbol=symbol,
-                start_date=start_date.isoformat(),
-                end_date=end_date.isoformat(),
-                interval='1d'
-            )
+            with DataManager._FETCH_LOCK:
+                df = fetcher.fetch_data(
+                    symbol=symbol,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                    interval='1d'
+                )
             source = selected_source
         except Exception as download_error:
             if latest_file:
@@ -192,10 +221,17 @@ class DataManager:
             
         # 4. 标准化数据格式
         df = self._standardize_dataframe(df)
-        
-        # 5. 保存文件（统一命名为 SYMBOL.csv）
+
+        # 5. 合并本地已有历史：窄区间请求只覆盖对应日期，不再把整份历史截断
+        #    （force_refresh 表示调用方明确要求重建，此时不做合并）
         filename = f"{symbol}.csv"
-        self.save_data(df, filename, index=False)
+        persisted = df
+        if update_existing and not force_refresh and latest_file:
+            persisted = self._merge_with_local(df, latest_file)
+
+        # 6. 保存文件（统一命名为 SYMBOL.csv；落盘为合并后的全历史，
+        #    返回值仍为本次请求区间，保持既有调用方语义不变）
+        self.save_data(persisted, filename, index=False)
         
         # 6. 清理旧文件（如果有）
         if latest_file and latest_file != filename:
