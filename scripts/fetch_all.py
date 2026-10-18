@@ -2,6 +2,11 @@
 """
 批量拉取 A 股历史数据（baostock）
 
+支持按指数成分股拉取：上证50 / 沪深300 / 中证500。
+**成分股会定期调整**，每次拉取都会把当期成分股清单落盘为快照
+（data/index/{name}_{updateDate}.json），并在日志里打印快照日，
+便于日后回溯「这一批数据是按哪一期的成分股拉的」。
+
 设计约束
 --------
 * baostock 是**全局单连接**库（每次调用 login/logout），必须串行。
@@ -40,8 +45,16 @@ from backend.core.data_manager import DataManager  # noqa: E402
 
 CATALOG_PATH = os.path.join("data", "raw", "symbols_dict_baostock.json")
 PROGRESS_PATH = os.path.join("data", "quality", "fetch_progress.json")
+INDEX_DIR = os.path.join("data", "index")
 DEFAULT_INTERVAL = 0.2
 MAX_RETRY = 3
+
+#: 指数成分股接口（baostock 命名里 sz50 指的是上证50，不是深证50）
+INDEX_QUERIES = {
+    "sz50": ("query_sz50_stocks", "上证50"),
+    "hs300": ("query_hs300_stocks", "沪深300"),
+    "zz500": ("query_zz500_stocks", "中证500"),
+}
 
 
 def load_catalog(path=CATALOG_PATH):
@@ -50,6 +63,51 @@ def load_catalog(path=CATALOG_PATH):
         payload = json.load(f)
     items = payload.get("items") if isinstance(payload, dict) else payload
     return [str(i.get("code", "")).strip() for i in items if str(i.get("code", "")).strip()]
+
+
+def load_index_members(name: str):
+    """拉取指数当期成分股并落盘快照，返回 (codes, snapshot_date)。"""
+    import pandas as pd
+
+    import baostock as bs
+
+    if name not in INDEX_QUERIES:
+        raise ValueError(f"Unsupported index: {name}. Supported: {sorted(INDEX_QUERIES)}")
+    fn_name, label = INDEX_QUERIES[name]
+
+    bs.login()
+    try:
+        rs = getattr(bs, fn_name)()
+        fields = list(rs.fields)
+        rows = []
+        while rs.error_code == "0" and rs.next():
+            rows.append(rs.get_row_data())
+    finally:
+        try:
+            bs.logout()
+        except Exception:
+            pass
+
+    df = pd.DataFrame(rows, columns=fields)
+    if df.empty or "code" not in df.columns:
+        raise RuntimeError(f"Empty index members for {name}")
+
+    snapshot = str(df["updateDate"].iloc[0]) if "updateDate" in df.columns else "unknown"
+    items = [{"code": str(r["code"]), "name": str(r.get("code_name", ""))}
+             for _, r in df.iterrows()]
+    payload = {"index": name, "label": label, "snapshot_date": snapshot,
+               "count": len(items), "items": items}
+
+    os.makedirs(INDEX_DIR, exist_ok=True)
+    snap_path = os.path.join(INDEX_DIR, f"{name}_{snapshot}.json")
+    latest_path = os.path.join(INDEX_DIR, f"{name}_latest.json")
+    for p in (snap_path, latest_path):
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    print(f"指数成分股：{label}（{name}）快照日 {snapshot}，{len(items)} 只")
+    print(f"  快照已落盘: {snap_path}")
+    return [i["code"] for i in items], snapshot
 
 
 def load_progress():
@@ -75,6 +133,8 @@ def save_progress(progress):
 
 def main():
     ap = argparse.ArgumentParser(description="批量拉取 baostock 历史数据")
+    ap.add_argument("--index", default=None, choices=sorted(INDEX_QUERIES),
+                    help="按指数成分股拉取：sz50=上证50, hs300=沪深300, zz500=中证500")
     ap.add_argument("--symbols", default=None, help="逗号分隔的标的代码（不传则用标的字典）")
     ap.add_argument("--start", default=None, help="起始日期 YYYY-MM-DD，默认 20 年前")
     ap.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD（排他，默认今天）")
