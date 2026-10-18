@@ -1,0 +1,100 @@
+# v2.0.0 六维打分（趋势 / 动量 / 量能 / 风险 / 估值 / 质量）
+#
+# 与 v1.1.0 的关系
+# ----------------
+# v1.1.0 是纯技术四维（19 个因子），18 个价量因子 + 1 个回撤因子。
+# v2.0.0 在此基础上补上**估值**与**质量**两个基本面维度（11 个因子），
+# 并按规格 §5.3 的 W_FULL 重新分配权重：技术四维从 0.35/0.28/0.22/0.15
+# 压到 0.24/0.18/0.14/0.10，腾出的 0.34 给估值 0.18 + 质量 0.16。
+#
+# 为什么技术权重必须降
+# --------------------
+# 直接叠加会让技术面占 65%：那套因子在趋势市里表现极好、在震荡市里连续
+# 被止损，叠加基本面后本来是想要「趋势过滤 + 估值约束」的互补效果，
+# 权重不降就退化成「技术面主导 + 基本面点缀」，P5 的工作等于白做。
+#
+# ⚠️ 快照不可混用
+# ---------------
+# 同一只股票在 v1.1.0 与 v2.0.0 下的 score_pct **不可比**：前者是 300 只
+# 纯技术面互比，后者是 300 只六维加权后互比。旧版本快照
+# `data/snapshots/score/version=v1.1.0` 原样保留，用于A/B对照与回测复现。
+#
+# 时点纪律
+# --------
+# 质量维度全部依赖 fundamental 表，已由 backend/core/fundamental.py 按
+# **公告日** 展开为日频面板 —— T 日只能看到 T 日之前已公告的财报。
+# 估值维度依赖 valuation 表（东财日频横截面）。
+version: v2.0.0
+description: 六维打分（趋势/动量/量能/风险/估值/质量），财务按公告日对齐防前视
+
+dimensions:
+  trend:
+    weight: 0.24
+    factors:
+      - ma_bias_20
+      - ma_bias_60
+      - ma_bias_120
+      - macd_hist_norm
+      - adx_dir
+      - slope_60
+
+  momentum:
+    weight: 0.18
+    factors:
+      - roc_20
+      - roc_60
+      - roc_120
+      - rs_60
+      - rsi_health
+
+  volume:
+    weight: 0.14
+    factors:
+      - vol_ratio
+      - obv_z
+      - mfi_14
+      - turn_rank
+
+  risk:
+    weight: 0.10
+    factors:
+      - atr_pct_rank
+      - hv_60
+      - downside_vol
+      - dd_1y
+
+  valuation:
+    weight: 0.18
+    factors:
+      - ep
+      - bp
+      - sp
+      - div_yield
+      - peg_safe
+
+  quality:
+    weight: 0.16
+    factors:
+      - roe_ttm
+      - roe_slope
+      - rev_yoy
+      - profit_yoy
+      - gross_margin
+      - ocf_to_profit
+
+grades:
+  - min_pct: 90
+    label: 强烈看多
+    key: strong_buy
+  - min_pct: 70
+    label: 看多
+    key: buy
+  - min_pct: 30
+    label: 中性
+    key: neutral
+  - min_pct: 10
+    label: 看空
+    key: sell
+  - min_pct: 0
+    label: 强烈看空
+    key: strong_sell

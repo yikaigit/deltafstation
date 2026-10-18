@@ -164,6 +164,9 @@ const ScorePage = (() => {
 
       state.items = list.items || [];
       state.meta = list.meta || {};
+      // 版本列表的「最后一个」才是最新的；但更可靠的是后端声明的默认版本，
+      // 由 /api/factors/eval 顺带返回，这里先记下榜单用的版本作为兜底。
+      if (state.meta.version) window.__defaultScoreVersion = state.meta.version;
       renderStats(state.items, state.meta);
       renderIndustryOptions();
       renderTable();
@@ -177,6 +180,8 @@ const ScorePage = (() => {
       }
 
       if (list.note) App.toast(list.note);
+      // 因子评价面板独立加载：它依赖打分版本列表，失败也不该拖垮榜单
+      loadFactorEval();
     } catch (err) {
       App.toast('打分数据加载失败：' + err.message, 'error');
       const body = el('score-body');
@@ -469,7 +474,198 @@ const ScorePage = (() => {
     window.addEventListener('resize', () => chart.resize());
   }
 
+  /* ---------------- 因子评价（P5） ---------------- */
+
+  const EVAL_LABELS = {
+    ic_mean: '|IC| ≥ 0.03',
+    ic_tstat: '|t| ≥ 2',
+    icir: 'ICIR ≥ 0.3',
+    ic_win_rate: '胜率 ≥ 55%',
+    monotonicity: '单调性 ≥ 0.6',
+    long_short: '多空 ≥ 8%',
+    turnover: '换手 < 60%',
+  };
+
+  function fmtCell(value, digits = 3, suffix = '') {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+    return Number(value).toFixed(digits) + suffix;
+  }
+
+  function renderEval(data) {
+    const body = el('fe-body');
+    const summary = el('fe-summary');
+    const sub = el('fe-sub');
+    if (!body) return;
+
+    if (!data || !data.available) {
+      body.innerHTML = `<tr><td colspan="11" style="padding:0">${App.empty(
+        '尚无因子评价报告',
+        (data && data.note) || '点右上角「重新评价」生成，或执行 scripts/evaluate.py'
+      )}</td></tr>`;
+      if (summary) summary.innerHTML = '';
+      if (sub) sub.textContent = 'IC / 分层 / 相关性';
+      return;
+    }
+
+    if (sub) sub.textContent = `${data.version} · 过线 ${data.passed}/${data.count}`;
+    const thresholds = data.thresholds || {};
+    if (summary) {
+      summary.innerHTML = `<div class="chips">${Object.entries(thresholds)
+        .map(([key, value]) => `<span class="chip" title="门禁阈值">${App.esc(
+          EVAL_LABELS[key] || key
+        )}</span>`)
+        .join('')}</div>`;
+    }
+
+    const rows = (data.items || []).slice().sort((a, b) => {
+      if (Boolean(a.passed) !== Boolean(b.passed)) return a.passed ? -1 : 1;
+      return Math.abs(Number(b.ic_mean) || 0) - Math.abs(Number(a.ic_mean) || 0);
+    });
+
+    body.innerHTML = rows
+      .map((row) => {
+        const passed = Boolean(row.passed);
+        const failed = (row.failed_on || []).join('、');
+        const badge = passed
+          ? '<span class="badge strong_buy">过线</span>'
+          : `<span class="badge warn" title="${App.esc(failed)}">未过线</span>`;
+        const icTone = Number(row.ic_mean) >= 0 ? 'up' : 'down';
+        return `<tr>
+          <td class="mono">${App.esc(row.name)}</td>
+          <td class="small muted">${App.esc(row.category || '—')}</td>
+          <td class="right mono ${icTone}">${fmtCell(row.ic_mean, 4)}</td>
+          <td class="right mono">${fmtCell(row.ic_tstat, 2)}</td>
+          <td class="right mono">${fmtCell(row.icir, 3)}</td>
+          <td class="right mono">${
+            row.ic_win_rate == null ? '—' : (Number(row.ic_win_rate) * 100).toFixed(1) + '%'
+          }</td>
+          <td class="right mono">${fmtCell(row.monotonicity, 2)}</td>
+          <td class="right mono ${Number(row.long_short) >= 0 ? 'up' : 'down'}">${
+            row.long_short == null ? '—' : (Number(row.long_short) * 100).toFixed(1) + '%'
+          }</td>
+          <td class="right mono">${
+            row.turnover == null ? '—' : (Number(row.turnover) * 100).toFixed(0) + '%'
+          }</td>
+          <td class="right mono">${
+            row.coverage == null ? '—' : (Number(row.coverage) * 100).toFixed(0) + '%'
+          }</td>
+          <td>${badge}</td>
+        </tr>`;
+      })
+      .join('');
+
+    renderCorrelation(data.correlation);
+  }
+
+  function heatCell(value) {
+    if (value === null || value === undefined) return { bg: '#f3f4f6', color: 'inherit' };
+    const v = Math.max(-1, Math.min(1, Number(value)));
+    const intensity = Math.abs(v);
+    const base = v >= 0 ? [214, 69, 69] : [46, 158, 107];
+    const rgb = base.map((c) => Math.round(255 - (255 - c) * intensity));
+    return { bg: `rgb(${rgb.join(',')})`, color: intensity > 0.55 ? '#fff' : 'inherit' };
+  }
+
+  function renderCorrelation(corr) {
+    const box = el('fe-corr');
+    if (!box) return;
+    if (!corr || !corr.index || !corr.index.length) {
+      box.innerHTML = '';
+      return;
+    }
+    const names = corr.columns;
+    const head = '<tr><th></th>' + names.map((n) => `<th>${App.esc(n)}</th>`).join('') + '</tr>';
+    const body = corr.index
+      .map((rowName, i) => {
+        const cells = names
+          .map((_, j) => {
+            const value = corr.values[i] ? corr.values[i][j] : null;
+            const { bg, color } = heatCell(value);
+            const text = value === null ? '—' : Number(value).toFixed(2);
+            return `<td style="background:${bg};color:${color};text-align:center">${text}</td>`;
+          })
+          .join('');
+        return `<tr><th style="position:static;background:var(--surface-2)">${App.esc(rowName)}</th>${cells}</tr>`;
+      })
+      .join('');
+    box.innerHTML = `<h3 class="drawer-h3">因子相关性（IC 序列的秩相关，红正绿负）</h3>
+      <div class="table-wrap" style="max-height:420px">
+        <table class="heat" style="border-spacing:2px">${head}${body}</table>
+      </div>`;
+  }
+
+  async function loadFactorEval() {
+    const select = el('fe-version');
+    try {
+      if (select && !select.options.length) {
+        const versions = await App.get('/api/score-versions');
+        const items = versions.items || [];
+        // 默认选「有评价报告的版本」。
+        //
+        // ⚠️ 版本列表按字母序，v1.0.0 排最前但它通常没报告；榜单的
+        // state.meta.version 在本函数首次调用时可能还没就绪（两个请求
+        // 并发）。所以这里先问后端「哪个版本有报告」，拿不到再退回
+        // default_version，最后才用列表末尾。
+        let preferred = null;
+        try {
+          const probe = await App.get('/api/factors/eval', { version: '__probe__' });
+          const available = probe.available_versions || [];
+          preferred =
+            available[available.length - 1] || probe.default_version || null;
+        } catch (e) {
+          preferred = null;
+        }
+        if (!preferred) preferred = items.length ? items[items.length - 1].version : null;
+        select.innerHTML = items
+          .map((v) => `<option value="${App.esc(v.version)}">${App.esc(v.version)}</option>`)
+          .join('');
+        if (preferred && items.some((v) => v.version === preferred)) {
+          select.value = preferred;
+        }
+      }
+      const version = select && select.value ? select.value : '';
+      const data = await App.get('/api/factors/eval', version ? { version } : undefined);
+      renderEval(data);
+    } catch (err) {
+      const body = el('fe-body');
+      if (body) {
+        body.innerHTML = `<tr><td colspan="11" class="muted" style="padding:16px;text-align:center">${App.esc(
+          err.message
+        )}</td></tr>`;
+      }
+    }
+  }
+
+  async function runEval() {
+    const btn = el('fe-run');
+    const select = el('fe-version');
+    if (btn) btn.disabled = true;
+    try {
+      const payload = { version: select && select.value ? select.value : undefined };
+      const res = await App.post('/api/jobs', { kind: 'evaluate', params: payload });
+      App.toast('已提交评价任务 ' + res.job_id + '，完成后自动刷新');
+      // 轮询任务状态（30 因子约 30 秒）
+      for (let i = 0; i < 60; i += 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const job = await App.get('/api/jobs/' + encodeURIComponent(res.job_id));
+        if (job.status === 'success') {
+          App.toast('因子评价完成');
+          break;
+        }
+        if (job.status === 'failed') {
+          App.toast('因子评价失败：' + (job.message || ''), 'error');
+          break;
+        }
+      }
+      await loadFactorEval();
+    } catch (err) {
+      App.toast('提交失败：' + err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', reload);
 
-  return { reload, applyFilter, openDetail };
+  return { reload, applyFilter, openDetail, loadFactorEval, runEval };
 })();

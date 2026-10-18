@@ -96,6 +96,36 @@
     </div>
   </div>
 </div>
+<div class="card" id="factor-eval-card">
+  <div class="card-head">
+    <h2 class="card-title">因子评价</h2>
+    <span class="card-sub" id="fe-sub">IC / 分层 / 相关性</span>
+    <div class="spacer"></div>
+    <div class="row">
+      <select id="fe-version" onchange="ScorePage.loadFactorEval()" title="评价对应的打分版本"></select>
+      <button class="btn btn-sm" onclick="ScorePage.runEval()" id="fe-run">重新评价</button>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="fe-summary" class="mb-16"></div>
+    <div class="table-wrap" style="max-height:460px">
+      <table>
+        <thead>
+          <tr>
+            <th>因子</th><th>维度</th>
+            <th class="right">IC 均值</th><th class="right">t 值</th><th class="right">ICIR</th>
+            <th class="right">IC 胜率</th><th class="right">单调性</th><th class="right">多空年化</th>
+            <th class="right">换手</th><th class="right">覆盖</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody id="fe-body">
+          <tr><td colspan="11" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="fe-corr" class="mt-16"></div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}

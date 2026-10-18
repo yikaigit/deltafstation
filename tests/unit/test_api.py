@@ -340,12 +340,15 @@ class TestJobAPI:
         assert res.status_code == 400
         assert body(res)["error"]["code"] == "invalid_params"
 
-    @pytest.mark.parametrize("kind", ["evaluate"])
-    def test_unimplemented_kinds(self, client, kind):
-        """score 自 P2 起已实现（backend/core/scorer.py），只有 evaluate 还是 501。"""
-        res = client.post("/api/jobs", json={"kind": kind})
-        assert res.status_code == 501
-        assert body(res)["error"]["code"] == "not_implemented"
+    def test_evaluate_kind_accepted(self, client, runner):
+        """evaluate 在 P5 已实现：不再是 501，而是正常入队。
+
+        （历史上这里是 ``test_unimplemented_kinds`` 断言 501 —— 那个
+        占位断言在功能落地后必须删掉，否则会永远拦住新功能的验收。）
+        """
+        res = client.post("/api/jobs", json={"kind": "evaluate", "params": {"version": "v2.0.0"}})
+        assert res.status_code == 201
+        assert body(res)["data"]["kind"] == "evaluate"
 
     def test_get_detail(self, client, runner):
         job_id = body(client.post("/api/jobs", json={"kind": "update"}))["data"]["job_id"]

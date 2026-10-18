@@ -33,7 +33,7 @@ DEFAULTS: Dict[str, Any] = {
         "meta_db": "data/meta.db",
     },
     "universe": {"index": "hs300", "start_date": "2008-01-01", "backtest_years": 5, "exclude_st": True},
-    "schedule": {"update_time": "18:00", "retry_until": "22:00", "retry_interval_min": 30, "enabled": True},
+    "schedule": {"update_time": "18:00", "enabled": False},
     "costs": {
         "commission": 0.00025,
         "min_commission": 5.0,

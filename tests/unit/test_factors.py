@@ -15,7 +15,15 @@ import pandas as pd
 import pytest
 
 from backend.core import factors as fl
-from backend.core.factors import CATEGORY_LABELS, MOMENTUM, RISK, TREND, VOLUME
+from backend.core.factors import (
+    CATEGORY_LABELS,
+    MOMENTUM,
+    QUALITY,
+    RISK,
+    TREND,
+    VALUATION,
+    VOLUME,
+)
 from backend.core.panels import Panels
 
 DATES = pd.bdate_range("2023-01-02", periods=340)
@@ -58,13 +66,49 @@ def make_panel(seed=7, codes=("a", "b", "c"), n_days=340, drift=(0.0004, 0.0, -0
     )
 
 
+def _with_fundamental_frames(panel):
+    """给合成面板补上估值/质量字段（P5 因子需要）。
+
+    合成面板只造了行情，估值与财务字段是 P5 才引入的。这里用「贴近真实的数据」
+    补上：PE 在 10~40 之间波动、ROE 为正、部分票 PEG 为负（覆盖亏损分支）。
+    数值本身不重要，重要的是**形状与 dtype 与真实面板一致**，
+    这样因子代码里的 NaN 语义、量纲处理才会被真正执行到。
+    """
+    index = panel.dates
+    codes = panel.codes
+    n = len(index)
+    rng = np.random.default_rng(42)
+
+    def frame(low, high):
+        values = rng.uniform(low, high, size=(n, len(codes)))
+        return pd.DataFrame(values, index=index, columns=codes).astype("float32")
+
+    panel._frames["pe_ttm"] = frame(5.0, 60.0)
+    panel._frames["pb_mrq"] = frame(0.5, 8.0)
+    panel._frames["ps_ttm"] = frame(0.4, 12.0)
+    panel._frames["peg"] = frame(-2.0, 4.0)          # 含负值，覆盖 peg_safe 的过滤分支
+    panel._frames["total_mv"] = frame(1e10, 5e11)
+    panel._frames["roe_wa"] = frame(-5.0, 30.0)
+    panel._frames["eps"] = frame(-0.5, 3.0)
+    panel._frames["bps"] = frame(1.0, 30.0)
+    panel._frames["rev_yoy"] = frame(-30.0, 60.0)
+    panel._frames["profit_yoy"] = frame(-50.0, 120.0)
+    panel._frames["gross_margin"] = frame(5.0, 80.0)
+    panel._frames["ocf_ps"] = frame(-0.5, 4.0)
+    panel._frames["div_yield"] = frame(0.0, 6.0)
+    return panel
+
+
 class TestRegistry:
     def test_factor_count_and_categories(self):
-        assert len(fl.FACTORS) == 19
+        # P5 起 19 技术因子 + 5 估值 + 6 质量 = 30
+        assert len(fl.FACTORS) == 30
         assert len(fl.names_by_category(TREND)) == 6
         assert len(fl.names_by_category(MOMENTUM)) == 5
         assert len(fl.names_by_category(VOLUME)) == 4
         assert len(fl.names_by_category(RISK)) == 4
+        assert len(fl.names_by_category(VALUATION)) == 5
+        assert len(fl.names_by_category(QUALITY)) == 6
 
     def test_category_labels_cover_all(self):
         for category in fl.categories():
@@ -86,15 +130,24 @@ class TestRegistry:
         assert fl.FACTORS["dd_1y"].direction == 1
 
     def test_lookbacks_match_config(self):
-        """配置 v1.0.0 引用的因子必须全部已注册，且 lookback 覆盖最大滚动窗口。"""
+        """每个版本配置引用的因子都必须已注册，且 lookback 覆盖最大滚动窗口。
+
+        注意不能断言 `set(spec["factors"]) == set(fl.FACTORS)`：
+        注册表是「所有可用因子」的超集，而具体版本只用其中一部分
+        （v1.1.0 只有 19 个技术因子，v2.0.0 才用满 30 个）。
+        正确的约束是「版本引用的 ⊆ 注册表」。
+        """
         from backend.core.scorer import Scorer
 
-        spec = Scorer.load_version("v1.0.0")
-        assert set(spec["factors"]) == set(fl.FACTORS), "配置引用与注册表不一致"
+        for version in ("v1.0.0", "v1.1.0", "v2.0.0"):
+            spec = Scorer.load_version(version)
+            assert set(spec["factors"]) <= set(fl.FACTORS), f"{version} 引用了未注册因子"
+        # 全量注册表的最大 lookback 是技术因子的 260 天窗口
         assert max(f.lookback for f in fl.FACTORS.values()) == 260
 
     def test_categories_order(self):
-        assert fl.categories() == [TREND, MOMENTUM, VOLUME, RISK]
+        # 顺序即注册顺序：先技术四维，再估值、质量（P5 追加）
+        assert fl.categories() == [TREND, MOMENTUM, VOLUME, RISK, VALUATION, QUALITY]
 
 
 class TestComputeApi:
@@ -315,8 +368,13 @@ class TestDirectionAndRange:
 
 class TestAllFactorsSmoke:
     def test_every_factor_runs_and_matches_shape(self):
-        """19 个因子在合成面板上都能算完，输出同形状 float32。"""
+        """全部因子在合成面板上都能算完，输出同形状 float32。
+
+        面板必须带估值/质量字段 —— 否则估值因子会 KeyError，
+        那这个「冒烟」就只覆盖了技术因子，P5 新增的 11 个等于没测。
+        """
         panel = make_panel(n_days=320)
+        panel = _with_fundamental_frames(panel)
         for name in fl.FACTORS:
             out = fl.compute(name, panel)
             assert out.shape == panel.shape, name
@@ -347,7 +405,10 @@ class TestNamesAndLabels:
         assert "roc_20" in fl.names_by_category(MOMENTUM)
         assert "mfi_14" in fl.names_by_category(VOLUME)
         assert "hv_60" in fl.names_by_category(RISK)
-        assert fl.names_by_category("valuation") == []
+        # P5 之前这里断言「估值维度为空」；现在两个维度都已实现
+        assert "ep" in fl.names_by_category(VALUATION)
+        assert "roe_ttm" in fl.names_by_category(QUALITY)
+        assert fl.names_by_category("no_such_category") == []
 
     def test_factor_callable_directly(self):
         panel = make_panel(n_days=100)

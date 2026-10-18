@@ -284,3 +284,131 @@ class TestScoreDetailExtras:
         data = body(client.get("/api/scores/sh.600000"))["data"]
         assert data["kline"] == []
         assert isinstance(data["indicators"], dict)
+
+
+class TestFactorEvalAPI:
+    """因子评价接口：类型契约（CSV 的序列化细节不能漏给前端）。"""
+
+    def _write_report(self, root, version="v2.0.0"):
+        from backend.core.config import get_config
+
+        folder = Path(get_config().paths.data) / "reports"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"factor_eval_{version}.csv").write_text(
+            "name,category,direction,ic_mean,ic_tstat,icir,ic_win_rate,monotonicity,"
+            "long_short,turnover,coverage,passed,failed_on\n"
+            "ep,valuation,1,0.057,7.5,0.22,0.56,-0.1,-0.06,0.05,1.0,False,"
+            "\"['icir', 'monotonicity']\"\n"
+            "peg_safe,valuation,-1,0.051,13.7,0.40,0.64,1.0,0.25,0.08,0.7,True,[]\n",
+            encoding="utf-8-sig",
+        )
+        (folder / f"factor_corr_{version}.csv").write_text(
+            ",ep,peg_safe\nep,1.0,0.04\npeg_safe,0.04,1.0\n", encoding="utf-8-sig"
+        )
+
+    def test_failed_on_is_list_not_string(self, client, root):
+        """CSV 里的 list 是字符串，接口必须还原成真数组。
+
+        回归：前端拿到字符串后 ``.join`` 直接报 "not a function"，
+        整块因子评价面板变成一行报错文本。
+        """
+        self._write_report(root)
+        data = body(client.get("/api/factors/eval?version=v2.0.0"))["data"]
+        assert data["available"] is True
+        assert data["count"] == 2
+        first = data["items"][0]
+        assert isinstance(first["failed_on"], list)
+        assert first["failed_on"] == ["icir", "monotonicity"]
+        assert isinstance(first["passed"], bool)
+        assert first["passed"] is False
+
+    def test_passed_row_has_empty_list(self, client, root):
+        self._write_report(root)
+        data = body(client.get("/api/factors/eval?version=v2.0.0"))["data"]
+        row = next(r for r in data["items"] if r["name"] == "peg_safe")
+        assert row["failed_on"] == []
+        assert row["passed"] is True
+
+    def test_correlation_shape(self, client, root):
+        self._write_report(root)
+        corr = body(client.get("/api/factors/eval?version=v2.0.0"))["data"]["correlation"]
+        assert corr["index"] == ["ep", "peg_safe"]
+        assert corr["columns"] == ["ep", "peg_safe"]
+        assert len(corr["values"]) == 2
+
+    def test_missing_report_lists_available_versions(self, client, root):
+        self._write_report(root, version="v2.0.0")
+        data = body(client.get("/api/factors/eval?version=v1.0.0"))["data"]
+        assert data["available"] is False
+        # 前端据此自动切到有报告的版本
+        assert data["available_versions"] == ["v2.0.0"]
+
+    def test_factor_registry_endpoint(self, client):
+        data = body(client.get("/api/factors"))["data"]
+        names = {item["name"] for item in data["items"]}
+        assert {"ep", "bp", "roe_ttm", "ma_bias_20"} <= names
+        assert data["count"] == 30
+
+
+class TestFactorEvalAPI:
+    """因子评价接口：类型契约（CSV 的序列化细节不能漏给前端）。"""
+
+    def _write_report(self, root, version="v2.0.0"):
+        from backend.core.config import get_config
+
+        folder = Path(get_config().paths.data) / "reports"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"factor_eval_{version}.csv").write_text(
+            "name,category,direction,ic_mean,ic_tstat,icir,ic_win_rate,monotonicity,"
+            "long_short,turnover,coverage,passed,failed_on\n"
+            "ep,valuation,1,0.057,7.5,0.22,0.56,-0.1,-0.06,0.05,1.0,False,"
+            "\"['icir', 'monotonicity']\"\n"
+            "peg_safe,valuation,-1,0.051,13.7,0.40,0.64,1.0,0.25,0.08,0.7,True,[]\n",
+            encoding="utf-8-sig",
+        )
+        (folder / f"factor_corr_{version}.csv").write_text(
+            ",ep,peg_safe\nep,1.0,0.04\npeg_safe,0.04,1.0\n", encoding="utf-8-sig"
+        )
+
+    def test_failed_on_is_list_not_string(self, client, root):
+        """CSV 里的 list 是字符串，接口必须还原成真数组。
+
+        回归：前端拿到字符串后 ``.join`` 直接报 "not a function"，
+        整块因子评价面板变成一行报错文本。
+        """
+        self._write_report(root)
+        data = body(client.get("/api/factors/eval?version=v2.0.0"))["data"]
+        assert data["available"] is True
+        assert data["count"] == 2
+        first = data["items"][0]
+        assert isinstance(first["failed_on"], list)
+        assert first["failed_on"] == ["icir", "monotonicity"]
+        assert isinstance(first["passed"], bool)
+        assert first["passed"] is False
+
+    def test_passed_row_has_empty_list(self, client, root):
+        self._write_report(root)
+        data = body(client.get("/api/factors/eval?version=v2.0.0"))["data"]
+        row = next(r for r in data["items"] if r["name"] == "peg_safe")
+        assert row["failed_on"] == []
+        assert row["passed"] is True
+
+    def test_correlation_shape(self, client, root):
+        self._write_report(root)
+        corr = body(client.get("/api/factors/eval?version=v2.0.0"))["data"]["correlation"]
+        assert corr["index"] == ["ep", "peg_safe"]
+        assert corr["columns"] == ["ep", "peg_safe"]
+        assert len(corr["values"]) == 2
+
+    def test_missing_report_lists_available_versions(self, client, root):
+        self._write_report(root, version="v2.0.0")
+        data = body(client.get("/api/factors/eval?version=v1.0.0"))["data"]
+        assert data["available"] is False
+        # 前端据此自动切到有报告的版本
+        assert data["available_versions"] == ["v2.0.0"]
+
+    def test_factor_registry_endpoint(self, client):
+        data = body(client.get("/api/factors"))["data"]
+        names = {item["name"] for item in data["items"]}
+        assert {"ep", "bp", "roe_ttm", "ma_bias_20"} <= names
+        assert data["count"] == 30

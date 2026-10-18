@@ -227,12 +227,163 @@ const Index = (() => {
     try {
       const res = await App.post('/api/jobs', { kind: 'update' });
       App.toast('已提交数据更新任务：' + (res.job_id || ''));
-      if (hint) hint.textContent = '任务 ' + (res.job_id || '') + ' 已排队，进度见下方任务表';
+      if (hint) hint.textContent =
+        '已提交今日行情刷新（' + (res.job_id || '') + '）；补历史缺口请用上方「补齐并打分」';
       await renderJobs();
     } catch (err) {
       App.toast('提交失败：' + err.message, 'error');
     } finally {
       if (btn) btn.disabled = false;
+    }
+  }
+
+  /* ---------------- 收盘后补齐（P6） ---------------- */
+
+  let catchupTimer = null;
+
+  const GAP_LABEL = {
+    bars: '行情',
+    index_bars: '指数',
+    valuation: '估值',
+  };
+
+  function renderCatchup(data) {
+    const gap = data.gap || {};
+    const badge = el('cu-badge');
+    const gapNode = el('cu-gap');
+    const scoreNode = el('cu-score');
+    const lastNode = el('cu-last');
+    const sub = el('cu-sub');
+
+    if (!badge) return;
+    el('cu-target').textContent = gap.target || '—';
+
+    if (gap.complete) {
+      badge.className = 'badge ok';
+      badge.textContent = '数据已齐';
+      gapNode.innerHTML = `<span class="up">${App.esc(gap.note || '')}</span>`;
+    } else {
+      badge.className = 'badge warn';
+      badge.textContent = `缺 ${gap.days_to_fill_count} 天`;
+      const detail = Object.entries(gap.datasets || {})
+        .filter(([, g]) => g.missing_count > 0)
+        .map(([name, g]) => `${GAP_LABEL[name] || name} 缺 ${g.missing_count} 天`)
+        .join(' · ');
+      gapNode.innerHTML = `<span class="down">${App.esc(detail || '')}</span>
+        <span class="faint small">（${App.esc((gap.days_to_fill || []).slice(0, 5).join(', '))}${
+          gap.days_to_fill_count > 5 ? ' …' : ''
+        }）</span>`;
+    }
+
+    const score = data.score || {};
+    if (score.latest_date) {
+      const behind = score.latest_date !== gap.target;
+      scoreNode.innerHTML = `<span class="mono">${App.esc(score.version)}</span> ·
+        <span class="mono ${behind ? 'down' : ''}">${App.esc(score.latest_date)}</span>
+        <span class="faint small">（${score.dates} 个交易日）</span>`;
+    } else {
+      scoreNode.textContent = '尚无打分快照';
+    }
+
+    const last = data.last_run || {};
+    if (last.job_id) {
+      const tone =
+        last.status === 'success' ? 'up' : last.status === 'failed' ? 'down' : 'muted';
+      lastNode.innerHTML = `<span class="${tone}">${App.esc(last.status)}</span>
+        <span class="faint small">${App.esc(last.message || '')}</span>
+        <span class="faint small mono">${App.esc((last.created_at || '').slice(0, 19))}</span>`;
+    } else {
+      lastNode.innerHTML = '<span class="faint small">尚未运行过</span>';
+    }
+
+    if (sub) {
+      sub.textContent = gap.complete
+        ? `回看 ${data.lookback_days} 个交易日，无缺口`
+        : `回看 ${data.lookback_days} 个交易日，发现缺口`;
+    }
+
+    // 有任务在跑就接上进度
+    if (last.job_id && (last.status === 'pending' || last.status === 'running')) {
+      watchJob(last.job_id);
+    }
+  }
+
+  async function loadCatchup() {
+    try {
+      const data = await App.get('/api/catchup/status');
+      renderCatchup(data);
+    } catch (err) {
+      const badge = el('cu-badge');
+      if (badge) {
+        badge.className = 'badge muted';
+        badge.textContent = '检查失败';
+      }
+    }
+  }
+
+  function watchJob(jobId) {
+    const box = el('cu-progress');
+    const bar = el('cu-bar');
+    const msg = el('cu-msg');
+    if (box) box.hidden = false;
+    if (catchupTimer) clearTimeout(catchupTimer);
+
+    const tick = async () => {
+      try {
+        const job = await App.get('/api/jobs/' + encodeURIComponent(jobId));
+        const ratio = Math.max(0, Math.min(1, Number(job.progress) || 0));
+        if (bar) bar.style.width = (ratio * 100).toFixed(0) + '%';
+        if (msg) msg.textContent = `${job.message || ''}  ${(ratio * 100).toFixed(0)}%`;
+
+        if (job.status === 'success' || job.status === 'failed' || job.status === 'cancelled') {
+          if (box) box.hidden = true;
+          if (bar) bar.style.width = '0%';
+          catchupTimer = null;
+          // 完成后刷新卡片与榜单
+          await loadCatchup();
+          await reload();
+          if (job.status === 'success') {
+            App.toast('补齐完成：' + (job.message || ''));
+          } else {
+            App.toast('补齐失败：' + (job.message || ''), 'error');
+          }
+          return;
+        }
+        catchupTimer = setTimeout(tick, 1500);
+      } catch (err) {
+        catchupTimer = setTimeout(tick, 3000);
+      }
+    };
+    tick();
+  }
+
+  async function runCatchup() {
+    const btn = el('cu-run');
+    const hint = el('cu-hint');
+    const withScore = el('cu-with-score');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '运行中…';
+    }
+    try {
+      const res = await App.post('/api/catchup/run', {
+        score: withScore ? withScore.checked : true,
+      });
+      if (res.already_running) {
+        App.toast(res.message || '已有一轮在跑');
+        watchJob(res.job_id);
+        return;
+      }
+      App.toast('已开始补齐：' + res.job_id);
+      if (hint) hint.textContent = '任务 ' + res.job_id + ' 运行中…';
+      watchJob(res.job_id);
+    } catch (err) {
+      App.toast('提交失败：' + err.message, 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '补齐并打分';
+      }
     }
   }
 
@@ -247,6 +398,7 @@ const Index = (() => {
       }
       renderStats(health, status);
       renderDatasets(health);
+      loadCatchup();
 
       const query = { date: 'latest' };
       if (health.score && health.score.versions && health.score.versions.length) {
@@ -269,5 +421,5 @@ const Index = (() => {
   window.addEventListener('resize', () => gradeChart && gradeChart.resize());
   document.addEventListener('DOMContentLoaded', reload);
 
-  return { reload, quickUpdate };
+  return { reload, quickUpdate, runCatchup, loadCatchup };
 })();

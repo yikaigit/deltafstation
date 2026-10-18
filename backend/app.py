@@ -15,6 +15,7 @@ from flask_cors import CORS
 
 from backend.api import fail, ok
 from backend.api.backtest_api import backtest_bp
+from backend.api.catchup_api import catchup_bp
 from backend.api.data_api import data_bp
 from backend.api.job_api import job_bp
 from backend.api.score_api import score_bp
@@ -87,6 +88,7 @@ def create_app() -> Flask:
     app.register_blueprint(score_bp, url_prefix="/api")
     app.register_blueprint(backtest_bp, url_prefix="/api")
     app.register_blueprint(job_bp, url_prefix="/api")
+    app.register_blueprint(catchup_bp, url_prefix="/api")
 
     @app.get("/api/health")
     def health():

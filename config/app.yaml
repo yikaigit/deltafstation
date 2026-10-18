@@ -25,11 +25,14 @@ universe:
   exclude_st: true
 
 # 每日任务（收盘后）
+#
+# P6 起不做内置定时器：用户是本地自用，电脑不总是开着，内置调度器失败了
+# 也没人知道。改为「首页按钮手动触发」+「启动时自检提示」。
+# 真的想要定时，用系统的任务计划（Windows 任务计划 / cron）调
+# scripts/update_daily.py 即可，不需要在应用里再造一个调度器。
 schedule:
-  update_time: "18:00"
-  retry_until: "22:00"
-  retry_interval_min: 30
-  enabled: true
+  update_time: "18:00"        # 仅用于提示文案「通常 18:00 后数据可用」
+  enabled: false              # 未实现内置调度，保留字段表示意图
 
 # 交易成本（保守口径）
 costs:
@@ -40,7 +43,7 @@ costs:
   lot_size: 100
 
 scoring:
-  default_version: v1.1.0
+  default_version: v2.0.0
   neutralize: industry       # industry / none
   winsor_mad: 5.0            # 去极值：median ± k×MAD
   min_industry_samples: 5    # 行业内样本不足时退回全市场分位

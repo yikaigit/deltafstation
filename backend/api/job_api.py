@@ -1,7 +1,7 @@
 """任务 API。
 
 - GET  /api/jobs              最近任务列表
-- POST /api/jobs             创建并执行任务（kind=update/backfill/score/evaluate）
+- POST /api/jobs             创建并执行任务（kind=update/backfill/score/evaluate/catchup）
 - GET  /api/jobs/<id>        任务详情
 - POST /api/jobs/<id>/cancel 请求取消（仅 pending/running 可取消）
 
@@ -22,17 +22,19 @@ logger = logging.getLogger(__name__)
 
 job_bp = Blueprint("job", __name__)
 
-SUPPORTED_KINDS = ("update", "backfill", "score", "evaluate")
+SUPPORTED_KINDS = ("update", "backfill", "score", "evaluate", "catchup")
 
 #: 尚未实现的类型（明确告知前端，而不是静默排队后失败）
-PENDING_KINDS = {"evaluate": "P5"}
+#: P5 起 evaluate 已实现，这里留空 —— 保留结构是为了 P6 可能的新任务类型。
+PENDING_KINDS: dict = {}
 
 #: 各类型允许的参数（防止把任意字段塞进 params）
 ALLOWED_PARAMS = {
     "update": {"trade_date", "with_fundamental", "code", "start"},
     "backfill": {"start", "end", "valuation_years", "with_fundamental"},
     "score": {"trade_date", "version", "full", "start", "end"},
-    "evaluate": {"version", "start", "end"},
+    "evaluate": {"version", "start", "end", "factors", "forward_days"},
+    "catchup": {"as_of", "lookback_days", "score", "version"},
 }
 
 

@@ -146,11 +146,41 @@ class Lake:
             filter=expr,
         )
         df = table.to_pandas()
-        if "date" in df.columns and (start or end):
-            if start:
-                df = df[df["date"] >= pd.Timestamp(start)]
-            if end:
-                df = df[df["date"] <= pd.Timestamp(end)]
+        # ⚠️ 日期过滤不能用「df 里有没有 date 列」当开关。
+        #
+        # 调用方常常写 ``columns=["code"], start=day, end=day``（只想要某天
+        # 有哪些票），此时 date 列没被读出来，旧实现会**静默跳过**过滤，
+        # 于是「当日有多少只票」变成了「历史上出现过多少只票」——
+        # 数据到位判定会永远返回 True，P6 的 pending 分支形同虚设。
+        #
+        # 修法：只要给了 start/end 且没取 date 列，就在**同一次读取**里
+        # 把 date 一并读出来做掩码，最后再裁掉。绝不能分两次 to_table ——
+        # 两次调用的行序不保证一致，用位置掩码会错位（踩过：
+        # "Item wrong length 6 instead of 4"）。
+        # columns=None 表示「所有列」，此时 date 本来就在，不需要额外补读
+        # 更不能事后 drop（早期写成 not wants_date 会把全列读取的 date 删掉，
+        # 导致 ``out["date"]`` 直接 KeyError）
+        wants_date = columns is None or "date" in columns
+        need_mask = bool(start or end) and not wants_date
+        read_columns = list(columns) if columns else None
+        if need_mask:
+            read_columns = (read_columns or []) + ["date"]
+
+        table = dataset.to_table(columns=read_columns, filter=expr)
+        df = table.to_pandas()
+
+        if start or end:
+            dates = df["date"] if "date" in df.columns else None
+            if dates is not None:
+                keep = pd.Series(True, index=df.index)
+                if start:
+                    keep &= dates >= pd.Timestamp(start)
+                if end:
+                    keep &= dates <= pd.Timestamp(end)
+                df = df[keep.to_numpy()]
+
+        if need_mask and "date" in df.columns:
+            df = df.drop(columns=["date"])
         return df.reset_index(drop=True)
 
     # ---------- 写 ----------

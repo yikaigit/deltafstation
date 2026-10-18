@@ -222,3 +222,47 @@ class TestReadFilters:
         lake.write("bars", bars_df)
         with pytest.raises(LakeError):
             lake.read("bars", filters=[("code", "~", "sh.600000")])
+
+
+class TestDateFilterWithoutDateColumn:
+    """回归：``columns=["code"]`` + 日期范围时，日期过滤不能被静默跳过。
+
+    这是一个**沉默**的 bug —— 不报错、不警告，只是把「当日有多少只票」
+    悄悄变成了「历史上出现过多少只票」。P6 的「数据到位」判定就挂在这上面：
+    修复前 ``landed_report`` 会永远返回 True，pending 分支形同虚设。
+    """
+
+    def test_date_range_applied_without_date_column(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", columns=["code"], start="2024-01-02", end="2024-01-02")
+        # 样本里 2024-01-02 有两只票
+        assert len(out) == 2
+        assert "date" not in out.columns
+
+    def test_no_rows_outside_range(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", columns=["code"], start="2024-06-01", end="2024-06-30")
+        assert out.empty
+
+    def test_full_history_when_no_range(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", columns=["code"])
+        assert len(out) == len(bars_df)
+
+    def test_start_only(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", columns=["code"], start="2024-01-01")
+        # 样本里 2024 年之后有 3 条：600000 的 01-02/01-03 与 000001 的 01-02
+        assert len(out) == 3
+
+    def test_index_bars_and_valuation_same_behavior(self, lake):
+        import pandas as pd
+
+        lake.write("index_bars", pd.DataFrame({
+            "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+            "code": ["sh.000300", "sh.000300"],
+            "close": [3000.0, 3010.0], "open": [3000.0, 3000.0],
+            "high": [3010.0, 3020.0], "low": [2990.0, 3000.0], "volume": [1e6, 1e6],
+        }))
+        out = lake.read("index_bars", columns=["code"], start="2024-01-03", end="2024-01-03")
+        assert len(out) == 1

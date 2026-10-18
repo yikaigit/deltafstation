@@ -17,6 +17,14 @@
 ``raw_close`` 保留不复权价，用于「市值 / 价格档位 / 涨跌停判定」这类
 必须看真实报价的场景。``volume/amount/turn/pct_chg/tradestatus`` 保持原样。
 
+估值与财务
+----------
+``pe_ttm / pb_mrq / ps_ttm / peg / total_mv`` 来自 ``valuation`` 表（东财日频横截面）。
+``roe_wa / rev_yoy / ... / rev_ttm / net_profit_ttm`` 来自 ``fundamental``，由
+``fundamental.build_panel`` 按**公告日**展开 —— 关键点是「T 日只能看到 T 日之前
+已公告的财报」，绝不能按 ``report_date`` 取（那会在 7 月 1 日就用上 8 月才披露的
+半年报，是典型的前视偏差）。
+
 缺失值语义
 ----------
 未上市 / 退市之后是 ``NaN``（不是 0）—— 因子计算必须能区分「没有数据」
@@ -62,10 +70,27 @@ class Panels:
         frames: Dict[str, pd.DataFrame],
         industry: Optional[pd.Series] = None,
         bench_ret: Optional[pd.Series] = None,
+        meta: Optional[Dict[str, object]] = None,
     ):
         self._frames = frames
         self.industry = industry if industry is not None else pd.Series(dtype=object)
         self.bench_ret = bench_ret if bench_ret is not None else pd.Series(dtype="float64")
+        # 诊断信息（财务/asof 覆盖面等），写进任务日志用
+        self.meta: Dict[str, object] = meta or {}
+
+    @property
+    def date(self) -> pd.DataFrame:
+        """日期面板：每列都是该列的交易日索引。
+
+        估值因子需要「date × code」形状的 DataFrame 参与运算
+        （如 ``1 / pe``），而面板的 index 本身是日期，直接广播不方便，
+        所以提供一个与其它字段同形状的日期面板。
+        """
+        first = next(iter(self._frames.values()))
+        values = np.repeat(
+            first.index.to_numpy().reshape(-1, 1), len(first.columns), axis=1
+        )
+        return pd.DataFrame(values, index=first.index, columns=first.columns)
 
     def __getattr__(self, name: str):
         frames = self.__dict__.get("_frames") or {}
@@ -128,7 +153,7 @@ class Panels:
                         bench = bench.loc[bench.index >= pd.Timestamp(start)]
                     if end is not None:
                         bench = bench.loc[bench.index <= pd.Timestamp(end)]
-            return Panels(frames, industry=industry, bench_ret=bench)
+            return Panels(frames, industry=industry, bench_ret=bench, meta=self.meta)
 
     def describe(self) -> dict:
         """概况（写进任务日志，便于排查）。"""
@@ -154,8 +179,16 @@ class Panels:
         end: Optional[str] = None,
         benchmark: Optional[str] = None,
         dtype: str = "float32",
+        with_estimates: bool = True,
+        with_fundamental: bool = True,
     ) -> "Panels":
-        """从数据湖装配面板。"""
+        """从数据湖装配面板。
+
+        Args:
+            with_estimates: 是否装配估值字段（pe_ttm/pb_mrq/...）。
+                技术四维版本可以关掉，省 350ms 和一块内存。
+            with_fundamental: 是否装配财务字段（按公告日展开，防前视）。
+        """
         lake = lake or get_lake()
         cfg = cfg or get_config()
 
@@ -184,7 +217,28 @@ class Panels:
         industry = _load_industry(lake)
         bench_ret = _load_benchmark(lake, benchmark or cfg.get("backtest.benchmark", DEFAULT_BENCHMARK))
 
-        return cls(frames, industry=industry, bench_ret=bench_ret)
+        meta: Dict[str, object] = {}
+        dates = pd.DatetimeIndex(frames["close"].index)
+        codes_index = pd.Index(frames["close"].columns)
+
+        # 估值面板：东财日频横截面，与行情同轴。缺失的交易日用前值填充
+        # （估值口径按日更新，但停牌日没有横截面行；不填会让停牌股的估值因子变 NaN）
+        if with_estimates:
+            valuation_frames = _load_valuation(lake, dates, codes_index, dtype=dtype)
+            frames.update(valuation_frames)
+            meta["valuation_fields"] = sorted(valuation_frames)
+
+        # 财务面板：按公告日展开（防前视）
+        if with_fundamental:
+            from .fundamental import build_panel as build_fundamental
+
+            frame = lake.read("fundamental") if lake.exists("fundamental") else None
+            built = build_fundamental(frame, dates, codes_index)
+            for name, wide in built.frames.items():
+                frames[name] = wide.astype(dtype, errors="ignore") if dtype else wide
+            meta["fundamental"] = built.diagnostics
+
+        return cls(frames, industry=industry, bench_ret=bench_ret, meta=meta)
 
 
 def _pivot_all(bars: pd.DataFrame, dtype: str = "float32") -> Dict[str, pd.DataFrame]:
@@ -221,6 +275,52 @@ def _unstack(series: pd.Series, dtype: str = "float32") -> pd.DataFrame:
     if dtype:
         wide = wide.astype(dtype, errors="ignore")
     return wide
+
+
+def _load_valuation(
+    lake: Lake,
+    dates: pd.DatetimeIndex,
+    codes: pd.Index,
+    dtype: str = "float32",
+) -> Dict[str, pd.DataFrame]:
+    """估值宽表面板（index=date, columns=code）。
+
+    ``valuation`` 是「每天一个全市场横截面」，但停牌股当天没有行。
+    这里 reindex 到行情日期轴后做 ``ffill``：停牌期间沿用停牌前最后一个估值，
+    这是市场惯例（PE 不会因为停牌而消失）。回填上限 20 个交易日 ——
+    再长基本就是退市/长期停牌，沿用下去会捏造出一个不存在的估值。
+    """
+    if not lake.exists("valuation"):
+        logger.warning("缺少 valuation 数据集，估值维度将全部缺失")
+        return {}
+
+    frame = lake.read(
+        "valuation",
+        columns=["date", "code", "pe_ttm", "pb_mrq", "ps_ttm", "peg", "total_mv"],
+    )
+    if frame is None or frame.empty:
+        return {}
+
+    frame = frame.copy()
+    frame["code"] = frame["code"].astype(str)
+    frame = frame[frame["code"].isin(set(str(c) for c in codes))]
+    if frame.empty:
+        return {}
+
+    out: Dict[str, pd.DataFrame] = {}
+    for field in ("pe_ttm", "pb_mrq", "ps_ttm", "peg", "total_mv"):
+        if field not in frame.columns:
+            continue
+        wide = (
+            frame.pivot_table(index="date", columns="code", values=field, aggfunc="last")
+            .reindex(columns=codes)
+        )
+        wide.index = pd.DatetimeIndex(wide.index)
+        wide = wide.sort_index()
+        # 先对齐到行情日期轴再回填，避免「非交易日」占位
+        wide = wide.reindex(dates.union(wide.index)).ffill(limit=20).reindex(dates)
+        out[field] = wide.astype(dtype, errors="ignore") if dtype else wide
+    return out
 
 
 def _load_industry(lake: Lake) -> pd.Series:

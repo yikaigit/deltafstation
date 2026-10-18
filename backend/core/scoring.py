@@ -332,10 +332,14 @@ def score_panels(
     full_ratio = (
         float((quality_values[finite_quality] >= 0.999).mean()) if finite_quality.any() else 0.0
     )
+    # 文案里的维度数必须动态取：v1.x 是四维、v2.x 是六维，硬编码「四维」
+    # 会在六维版本上给出自相矛盾的诊断（实测踩过：v2.0.0 里写着「四维齐全 58%」）
+    dim_count = len(dim_scores)
     diagnostics.notes.append(
         f"有效交易日 {diagnostics.valid_dates} 天；"
-        f"四维齐全的「股票×日」格子占 {full_ratio:.1%}，"
-        f"其余因 lookback 不足缺失部分维度（权重已自动再归一，data_quality 字段记录实际覆盖率）"
+        f"{dim_count} 维齐全的「股票×日」格子占 {full_ratio:.1%}，"
+        f"其余因 lookback 不足或基本面缺失而缺部分维度"
+        f"（权重已自动再归一，data_quality 字段记录实际覆盖率）"
     )
 
     return {

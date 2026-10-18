@@ -404,3 +404,143 @@ def score_versions():
             }
         )
     return ok({"items": versions, "count": len(versions)})
+
+
+# ================= 因子评价（P5） =================
+
+_REPORTS_SUBPATH = "reports"
+
+
+def _reports_dir():
+    from pathlib import Path
+
+    from backend.core.config import get_config
+
+    return Path(get_config().paths.data) / _REPORTS_SUBPATH
+
+
+def _read_report_csv(path):
+    import pandas as pd
+
+    if not path.exists():
+        return None
+    try:
+        # utf-8-sig：报告是给 Excel 直接打开的，带 BOM
+        return pd.read_csv(path, encoding="utf-8-sig")
+    except Exception:
+        return None
+
+
+@score_bp.route("/factors", methods=["GET"])
+def list_factors():
+    """已注册因子的清单（前端画表格与筛选用）。"""
+    from backend.core import factors as factor_lib
+
+    items = []
+    for name, meta in factor_lib.FACTORS.items():
+        items.append(
+            {
+                "name": name,
+                "category": meta.category,
+                "category_label": factor_lib.CATEGORY_LABELS.get(meta.category, meta.category),
+                "direction": meta.direction,
+                "lookback": meta.lookback,
+                "description": meta.description,
+            }
+        )
+    return ok({"items": items, "count": len(items),
+               "categories": [{"key": k, "label": v} for k, v in factor_lib.CATEGORY_LABELS.items()]})
+
+
+@score_bp.route("/factors/eval", methods=["GET"])
+def factor_evaluation():
+    """读取最新一次因子评价报告。
+
+    参数 ``version`` 缺省取 ``scoring.default_version``。同时返回
+    阈值定义，前端可以直接标红未过线的格子，不用硬编码一份门槛。
+    """
+    from flask import request as _req
+
+    from backend.core import evaluation as evaluation_lib
+    from backend.core.config import get_config
+
+    version = _req.args.get("version") or get_config().get("scoring.default_version")
+    folder = _reports_dir()
+    eval_path = folder / f"factor_eval_{version}.csv"
+    corr_path = folder / f"factor_corr_{version}.csv"
+
+    table = _read_report_csv(eval_path)
+    if table is None:
+        # 顺带告诉前端「哪个版本有报告」：直接在服务端扫一遍文件名，
+        # 比让前端逐个版本试探要快，也避免选到空版本时显示成空表。
+        available = sorted(
+            p.name[len("factor_eval_"):-len(".csv")]
+            for p in folder.glob("factor_eval_*.csv")
+        ) if folder.exists() else []
+        return ok(
+            {
+                "available": False,
+                "version": version,
+                "default_version": get_config().get("scoring.default_version"),
+                "available_versions": available,
+                "note": "尚未生成该版本的因子评价报告，可执行 scripts/evaluate.py 或在每日打分页点「重新评价」",
+                "thresholds": evaluation_lib.THRESHOLDS,
+            }
+        )
+
+    correlation = _read_report_csv(corr_path)
+    records = []
+    for row in table.to_dict("records"):
+        clean = {}
+        for key, value in row.items():
+            if hasattr(value, "item"):
+                value = value.item()
+            if isinstance(value, float) and value != value:
+                value = None
+            clean[key] = value
+        # ⚠️ CSV 会把 list 写成字符串 "['icir', 'monotonicity']"，前端拿到
+        # 之后 ``.join`` 直接报 "not a function"。这里还原成真数组 ——
+        # 接口的契约是「JSON 类型」，不能把 CSV 的序列化细节漏给前端。
+        failed = clean.get("failed_on")
+        if isinstance(failed, str):
+            text = failed.strip()
+            if text.startswith("[") and text.endswith("]"):
+                text = text[1:-1]
+            clean["failed_on"] = [
+                item.strip().strip("'").strip('"')
+                for item in text.split(",")
+                if item.strip().strip("'").strip('"')
+            ]
+        elif failed is None:
+            clean["failed_on"] = []
+        # passed 同理：CSV 读回来可能是字符串 "True"
+        passed_value = clean.get("passed")
+        if isinstance(passed_value, str):
+            clean["passed"] = passed_value.strip().lower() in ("true", "1", "yes")
+        records.append(clean)
+
+    corr = None
+    if correlation is not None:
+        corr = {
+            "index": [str(v) for v in correlation.iloc[:, 0].tolist()],
+            "columns": [str(c) for c in correlation.columns[1:]],
+            "values": [
+                [None if (isinstance(v, float) and v != v) else float(v) for v in row]
+                for row in correlation.iloc[:, 1:].to_numpy().tolist()
+            ],
+        }
+
+    passed = int(sum(1 for r in records if r.get("passed")))
+    return ok(
+        {
+            "available": True,
+            "version": version,
+            "default_version": get_config().get("scoring.default_version"),
+            "items": records,
+            "count": len(records),
+            "passed": passed,
+            "correlation": corr,
+            "thresholds": evaluation_lib.THRESHOLDS,
+            "file": eval_path.name,
+        }
+    )

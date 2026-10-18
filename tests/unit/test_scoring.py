@@ -315,7 +315,9 @@ class TestScorePanels:
         assert diag["industry_fallback_codes"] == 3 # Y 不够 → 全市场
         assert diag["industry_neutral_factors"] == 3
         assert any("行业中性" in note for note in diag["notes"])
-        assert any("四维齐全" in note for note in diag["notes"])
+        # 维度数必须动态：这个用例只造了 3 个维度，文案就该说「3 维齐全」。
+        # 硬编码「四维」会在六维版本里给出自相矛盾的诊断（P5 实测踩过）。
+        assert any("3 维齐全" in note for note in diag["notes"]), diag["notes"]
 
     def test_diagnostics_without_industry(self):
         factors, meta, dim_of, weights, _, _ = self._build(industry=False)

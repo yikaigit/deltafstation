@@ -146,6 +146,27 @@ async function checkBacktestDetail(dom) {
   return `PASS 回测详情 ${id}：指标 ${metrics} 张 · 网格 ${cells} 格 · 净值 ${navPts} 点`;
 }
 
+/** 交互检查：每日打分页的「因子评价」面板（P5） */
+async function checkFactorEval(dom) {
+  const doc = dom.window.document;
+  let rows = 0;
+  for (let i = 0; i < 50; i += 1) {
+    await new Promise((r) => setTimeout(r, 100));
+    rows = doc.querySelectorAll('#fe-body > tr').length;
+    if (rows) break;
+  }
+  if (!rows) return 'FAIL 因子评价表未渲染';
+
+  const text = (doc.getElementById('fe-body').textContent || '').trim();
+  if (/加载中/.test(text)) return 'FAIL 因子评价仍在加载';
+  if (!doc.getElementById('fe-summary').textContent.trim()) {
+    // 无报告时 summary 为空是正常的，但表体应给出空状态说明
+    if (!/尚无因子评价/.test(text)) return 'FAIL 因子评价缺少阈值条或空状态说明';
+  }
+  const corr = doc.querySelectorAll('#fe-corr td').length;
+  return `PASS 因子评价：${rows} 个因子 · 相关矩阵 ${corr} 格`;
+}
+
 /** 交互检查：数据管理页的覆盖矩阵是否画出来了 */
 async function checkCoverage(dom) {
   const doc = dom.window.document;
@@ -159,6 +180,34 @@ async function checkCoverage(dom) {
   if (!cells) return 'FAIL 覆盖矩阵未渲染';
   if (years < 5) return `FAIL 覆盖矩阵表头只有 ${years} 列`;
   return `PASS 覆盖矩阵：${doc.querySelectorAll('#cover-body tr').length} 只 × ${years - 2} 年`;
+}
+
+/** 交互检查：首页「收盘后补齐」卡片（P6） */
+async function checkCatchupCard(dom) {
+  const doc = dom.window.document;
+  const badge = doc.getElementById('cu-badge');
+  if (!badge) return 'FAIL 缺少补齐卡片';
+
+  // /api/catchup/status 要读 60 个交易日的覆盖，给足时间
+  let text = '';
+  for (let i = 0; i < 60; i += 1) {
+    await new Promise((r) => setTimeout(r, 100));
+    text = (badge.textContent || '').trim();
+    if (text && text !== '检查中') break;
+  }
+  if (!text || text === '检查中') return 'FAIL 补齐卡片一直停在「检查中」';
+  if (!/数据已齐|缺 \d+ 天/.test(text)) return `FAIL 状态异常：${text}`;
+
+  const target = (doc.getElementById('cu-target').textContent || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(target)) return `FAIL 目标交易日异常：${target}`;
+
+  const runBtn = doc.getElementById('cu-run');
+  if (!runBtn || runBtn.disabled) return 'FAIL 补齐按钮不可用';
+
+  const scoreText = (doc.getElementById('cu-score').textContent || '').trim();
+  if (!scoreText || /undefined|NaN/.test(scoreText)) return 'FAIL 打分信息异常';
+
+  return `PASS 补齐卡片：${text} · 目标 ${target}`;
 }
 
 /** 交互检查：首页 Top/Bottom 与行业热力 */
@@ -341,9 +390,11 @@ async function main() {
     console.log('交互');
     const checks = [
       ['/scores', checkDrawer],
+      ['/scores', checkFactorEval],
       ['/backtest', checkBacktestDetail],
       ['/data', checkCoverage],
       ['/', checkHomeRanks],
+      ['/', checkCatchupCard],
     ];
     for (const [path, fn] of checks) {
       const dom = rendered.get(path);

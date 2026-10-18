@@ -36,6 +36,39 @@
   </div>
 </div>
 
+<div class="card mb-16" id="catchup-card">
+  <div class="card-head">
+    <h2 class="card-title">收盘后补齐</h2>
+    <span class="card-sub" id="cu-sub">检查数据缺口并补齐，然后打分</span>
+    <div class="spacer"></div>
+    <span class="badge" id="cu-badge">检查中</span>
+  </div>
+  <div class="card-body">
+    <div class="row" style="align-items:flex-start;gap:20px">
+      <div style="flex:1;min-width:280px">
+        <table class="kv">
+          <tr><th>目标交易日</th><td class="mono" id="cu-target">—</td></tr>
+          <tr><th>数据缺口</th><td id="cu-gap">—</td></tr>
+          <tr><th>最新打分</th><td id="cu-score">—</td></tr>
+          <tr><th>上次运行</th><td id="cu-last">—</td></tr>
+        </table>
+      </div>
+      <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:10px;min-width:200px">
+        <button class="btn btn-primary" id="cu-run" onclick="Index.runCatchup()">补齐并打分</button>
+        <label class="check" for="cu-with-score">
+          <input type="checkbox" id="cu-with-score" checked>
+          <span>同时打分</span>
+        </label>
+        <span class="faint small" id="cu-hint">baostock 通常 17:00 后才出当日数据</span>
+      </div>
+    </div>
+    <div id="cu-progress" class="mt-8" hidden>
+      <div class="dim-track"><i id="cu-bar" style="width:0%"></i></div>
+      <span class="faint small" id="cu-msg"></span>
+    </div>
+  </div>
+</div>
+
 <div class="card mb-16">
   <div class="card-head">
     <h2 class="card-title">快捷入口</h2>
@@ -43,11 +76,11 @@
   </div>
   <div class="card-body">
     <div class="row">
-      <button class="btn" onclick="Index.quickUpdate()" id="quick-update">触发数据更新</button>
+      <button class="btn" onclick="Index.quickUpdate()" id="quick-update">仅刷新今日行情</button>
       <a class="btn" href="/scores">查看每日打分</a>
       <a class="btn" href="/backtest">运行回测</a>
       <a class="btn" href="/data">数据管理</a>
-      <span class="faint small" id="quick-hint">更新任务在数据管理页可见进度</span>
+      <span class="faint small" id="quick-hint">「补齐并打分」会按交易日历补所有缺口，通常用这个</span>
     </div>
   </div>
 </div>

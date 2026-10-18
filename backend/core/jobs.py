@@ -14,7 +14,8 @@ baostock 是全局单连接（并发无意义），东财需要限速（并发�
 | update | 每日增量更新 | trade_date?, with_fundamental? |
 | backfill | 全量回填 | start?, end?, valuation_years?, with_fundamental? |
 | score | 每日打分（P2 实现） | — |
-| evaluate | 因子评价（P5 实现） | — |
+| evaluate | 因子评价（IC/分层/相关性） | version / start / end / factors / forward_days |
+| catchup | 收盘后补齐并发分（P6） | as_of / lookback_days / score / version |
 
 取消
 ----
@@ -128,7 +129,9 @@ class JobRunner:
         if kind == "score":
             return self._run_score
         if kind == "evaluate":
-            raise NotImplementedError("evaluate 任务将在 P5 阶段实现")
+            return self._run_evaluate
+        if kind == "catchup":
+            return self._run_catchup
         raise ValueError(f"未知任务类型：{kind}")
 
     # ---------- 具体任务 ----------
@@ -163,6 +166,87 @@ class JobRunner:
             with_fundamental=bool(params.get("with_fundamental", True)),
             progress=progress,
         )
+
+    @staticmethod
+    def _run_catchup(params: dict, progress: Callable) -> dict:
+        """收盘后补齐流水线（P6）：体检 → 补缺 → 判到位 → 打分 → 自检。
+
+        与直接调 ``update_daily`` 的区别：后者只对齐「今天」，中间断掉的日子
+        永远不会被补上；这里先和交易日历对账，按缺口区间逐日补。
+        """
+        from . import catchup as catchup_lib
+
+        outcome = catchup_lib.catch_up(
+            as_of=params.get("as_of"),
+            lookback_days=int(params.get("lookback_days") or 60),
+            score=bool(params.get("score", True)),
+            version=params.get("version"),
+            progress=progress,
+        )
+        return outcome
+
+    @staticmethod
+    def _run_evaluate(params: dict, progress: Callable) -> dict:
+        """因子评价任务（P5）。
+
+        与 CLI 走同一个 ``evaluation.evaluate_all``，区别只在于进度回调
+        和结果落盘 —— 这样「网页上跑一遍」与「命令行跑一遍」结果必然一致，
+        不会出现两套口径。
+        """
+        from pathlib import Path
+
+        from . import evaluation as evaluation_lib
+        from . import factors as factor_lib
+        from .config import get_config
+        from .panels import Panels
+        from .scorer import Scorer
+
+        cfg = get_config()
+        spec = Scorer.load_version(params.get("version") or cfg.get("scoring.default_version"))
+        names = params.get("factors") or spec["factors"]
+        names = [n for n in names if n in factor_lib.FACTORS]
+        if not names:
+            raise ValueError("没有可评价的因子")
+
+        start = params.get("start") or cfg.get("universe.start_date", "2008-01-01")
+        end = params.get("end")
+        forward_days = int(params.get("forward_days") or 20)
+
+        progress(0.05, f"装配面板（{start} ~ {end or '最新'}）")
+        panel = Panels.from_lake(start=start, end=end)
+
+        progress(0.15, f"计算 {len(names)} 个因子")
+        frames = factor_lib.compute_many(names, panel)
+
+        def on_item(index: int, total: int, name: str) -> None:
+            progress(0.35 + 0.55 * index / max(total, 1), f"评价 {index}/{total}（{name}）")
+
+        outcome = evaluation_lib.evaluate_all(
+            frames,
+            panel.close.astype("float64"),
+            directions={n: factor_lib.FACTORS[n].direction for n in frames},
+            categories={n: factor_lib.FACTORS[n].category for n in frames},
+            forward_days=forward_days,
+            progress=on_item,
+        )
+
+        progress(0.94, "写出报告")
+        out_dir = Path(cfg.paths.data) / "reports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        eval_path = out_dir / f"factor_eval_{spec['version']}.csv"
+        corr_path = out_dir / f"factor_corr_{spec['version']}.csv"
+        table = outcome["table"]
+        table.to_csv(eval_path, index=False, encoding="utf-8-sig")
+        outcome["correlation"].to_csv(corr_path, encoding="utf-8-sig")
+
+        return {
+            "version": spec["version"],
+            "factors": len(table),
+            "passed": int(table["passed"].sum()) if "passed" in table else 0,
+            "forward_days": forward_days,
+            "eval_path": str(eval_path),
+            "corr_path": str(corr_path),
+        }
 
     @staticmethod
     def _run_score(params: dict, progress: Callable) -> dict:
