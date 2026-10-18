@@ -1,4 +1,4 @@
-/* 首页：状态汇总 + 评级分布 + 最近任务 */
+/* 首页：状态汇总 + Top/Bottom 榜 + 行业热力 + 评级分布 + 最近任务 */
 const Index = (() => {
   let gradeChart = null;
 
@@ -11,20 +11,41 @@ const Index = (() => {
     cancelled: '已取消',
   };
 
-  function renderStats(health) {
+  const el = (id) => document.getElementById(id);
+
+  function renderStats(health, status) {
     const bars = (health.datasets && health.datasets.bars) || {};
     const score = health.score || {};
-    document.getElementById('stat-symbols').textContent = health.universe_count || 0;
-    document.getElementById('stat-symbols-hint').textContent = health.universe_count
+    el('stat-symbols').textContent = health.universe_count || 0;
+    el('stat-symbols-hint').textContent = health.universe_count
       ? '标的表已建立'
       : '标的表尚未建立';
-    document.getElementById('stat-latest').textContent = bars.latest_date || '—';
-    document.getElementById('stat-latest-hint').textContent = bars.exists ? 'bars 数据集' : '尚未回填数据';
+    el('stat-latest').textContent = bars.latest_date || '—';
+    el('stat-latest-hint').textContent = bars.exists ? 'bars 数据集' : '尚未回填数据';
     const versions = score.versions || [];
-    document.getElementById('stat-version').textContent = versions.length ? versions[versions.length - 1] : '—';
-    document.getElementById('stat-version-hint').textContent = versions.length ? '打分快照可用' : '尚无打分版本';
-    document.getElementById('stat-score-date').textContent = score.latest_date || '—';
-    document.getElementById('stat-score-hint').textContent = score.latest_date ? '快照已落盘' : '等待首次打分';
+    el('stat-version').textContent = versions.length ? versions[versions.length - 1] : '—';
+    el('stat-version-hint').textContent = score.latest_date
+      ? '最新快照 ' + score.latest_date
+      : versions.length
+      ? '尚无快照'
+      : '尚无打分版本';
+
+    const q = (status && status.quality) || {};
+    const qNode = el('stat-quality');
+    const qHint = el('stat-quality-hint');
+    if (!q.available) {
+      qNode.textContent = '—';
+      qNode.className = 'stat-value faint';
+      qHint.textContent = '尚未生成校验报告';
+    } else if (q.error_symbols) {
+      qNode.textContent = `ERROR ${q.error_symbols}`;
+      qNode.className = 'stat-value up';
+      qHint.textContent = `WARN ${q.warn_symbols || 0} / ${q.symbols || 0} 只 · ${q.trade_date || ''}`;
+    } else {
+      qNode.textContent = `WARN ${q.warn_symbols || 0}`;
+      qNode.className = 'stat-value';
+      qHint.textContent = `ERROR 0 / ${q.symbols || 0} 只 · ${q.trade_date || ''}`;
+    }
   }
 
   function renderDatasets(health) {
@@ -46,13 +67,88 @@ const Index = (() => {
         return `<span class="chip miss">${App.esc(label)} · 未建</span>`;
       })
       .join('');
-    document.getElementById('dataset-list').innerHTML = `<div class="chips">${html}</div>`;
+    el('dataset-list').innerHTML = `<div class="chips">${html}</div>`;
+  }
+
+  function rankRows(items) {
+    return items
+      .map(
+        (row, idx) => `<tr class="clickable" onclick="location.href='/scores'">
+          <td class="right mono faint">${idx + 1}</td>
+          <td class="mono">${App.esc(row.code)}</td>
+          <td>${App.esc(row.name || '—')}</td>
+          <td class="right mono strong">${
+            row.score_pct === null || row.score_pct === undefined
+              ? '—'
+              : Number(row.score_pct).toFixed(1)
+          }</td>
+          <td>${App.badge(row.grade)}</td>
+        </tr>`
+      )
+      .join('');
+  }
+
+  function renderRanks(items, date) {
+    const topBody = el('top-body');
+    const bottomBody = el('bottom-body');
+    const sorted = items
+      .slice()
+      .sort((a, b) => Number(b.score_pct) - Number(a.score_pct))
+      .filter((r) => r.score_pct !== null && r.score_pct !== undefined);
+    if (!sorted.length) {
+      const empty = `<tr><td colspan="5" style="padding:0">${App.empty(
+        '尚无打分数据',
+        '执行每日任务后这里会显示榜单'
+      )}</td></tr>`;
+      topBody.innerHTML = empty;
+      bottomBody.innerHTML = empty;
+      return;
+    }
+    el('top-date').textContent = date || '—';
+    el('bottom-date').textContent = date || '—';
+    topBody.innerHTML = rankRows(sorted.slice(0, 10));
+    bottomBody.innerHTML = rankRows(sorted.slice(-10).reverse());
+  }
+
+  function heatColor(value, lo, hi) {
+    if (value === null || value === undefined) return '#f3f4f6';
+    const t = Math.max(0, Math.min(1, (Number(value) - lo) / ((hi - lo) || 1)));
+    const mid = [243, 244, 246];
+    const edge = t < 0.5 ? [46, 158, 107] : [214, 69, 69];
+    const k = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+    const rgb = mid.map((m, i) => Math.round(m + (edge[i] - m) * k));
+    return `rgb(${rgb.join(',')})`;
+  }
+
+  function renderIndustryHeat(items) {
+    const box = el('industry-heat');
+    if (!items || !items.length) {
+      box.innerHTML = App.empty('暂无行业数据', '需要至少一只标的完成打分');
+      return;
+    }
+    const values = items.map((r) => Number(r.avg_score)).filter((v) => !Number.isNaN(v));
+    const lo = values.length ? Math.min(...values) : 0;
+    const hi = values.length ? Math.max(...values) : 100;
+    box.innerHTML = items
+      .slice(0, 20)
+      .map((row) => {
+        const avg = Number(row.avg_score);
+        const width = Math.max(2, Math.min(100, ((avg - lo) / ((hi - lo) || 1)) * 100));
+        return `<div class="heat-row" title="${App.esc(row.industry)} 均分 ${avg.toFixed(2)} · ${row.count} 只">
+          <span class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${App.esc(
+            row.industry || '—'
+          )}</span>
+          <span class="heat-track"><i style="width:${width}%;background:${heatColor(avg, lo, hi)}"></i></span>
+          <span class="small mono right">${avg.toFixed(1)}</span>
+        </div>`;
+      })
+      .join('');
   }
 
   function renderGradeChart(distribution, date) {
-    const dom = document.getElementById('chart-grade');
+    const dom = el('chart-grade');
     const entries = Object.entries(distribution || {});
-    document.getElementById('dist-date').textContent = date || '—';
+    el('dist-date').textContent = date || '—';
     if (!entries.length) {
       if (gradeChart) {
         gradeChart.dispose();
@@ -98,7 +194,7 @@ const Index = (() => {
   }
 
   async function renderJobs() {
-    const body = document.getElementById('job-body');
+    const body = el('job-body');
     try {
       const data = await App.get('/api/jobs', { limit: 8 });
       if (!data.items.length) {
@@ -124,13 +220,46 @@ const Index = (() => {
     }
   }
 
+  async function quickUpdate() {
+    const btn = el('quick-update');
+    const hint = el('quick-hint');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await App.post('/api/jobs', { kind: 'update' });
+      App.toast('已提交数据更新任务：' + (res.job_id || ''));
+      if (hint) hint.textContent = '任务 ' + (res.job_id || '') + ' 已排队，进度见下方任务表';
+      await renderJobs();
+    } catch (err) {
+      App.toast('提交失败：' + err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function reload() {
     try {
       const health = await App.get('/api/health');
-      renderStats(health);
+      let status = null;
+      try {
+        status = await App.get('/api/data/status');
+      } catch (e) {
+        status = null;
+      }
+      renderStats(health, status);
       renderDatasets(health);
-      const scoreData = await App.get('/api/scores', { date: 'latest' });
-      renderGradeChart(scoreData.meta.distribution, scoreData.meta.date);
+
+      const query = { date: 'latest' };
+      if (health.score && health.score.versions && health.score.versions.length) {
+        query.version = health.score.versions[health.score.versions.length - 1];
+      }
+      const [scoreData, industries] = await Promise.all([
+        App.get('/api/scores', query),
+        App.get('/api/scores/industries', query).catch(() => ({ items: [] })),
+      ]);
+      const date = (scoreData.meta || {}).date;
+      renderGradeChart((scoreData.meta || {}).distribution, date);
+      renderRanks(scoreData.items || [], date);
+      renderIndustryHeat(industries.items || []);
     } catch (err) {
       App.toast(err.message, 'error');
     }
@@ -140,5 +269,5 @@ const Index = (() => {
   window.addEventListener('resize', () => gradeChart && gradeChart.resize());
   document.addEventListener('DOMContentLoaded', reload);
 
-  return { reload };
+  return { reload, quickUpdate };
 })();

@@ -12,6 +12,7 @@ const DataPage = (() => {
   const state = {
     symbols: [],
     datasets: {},
+    coverage: null,
     keyword: '',
     industry: '',
     loaded: false,
@@ -179,6 +180,170 @@ const DataPage = (() => {
       .join('');
   }
 
+  function renderQuality(quality) {
+    const panel = el('quality-panel');
+    const dateNode = el('q-date');
+    if (!panel) return;
+    if (!quality || !quality.available) {
+      if (dateNode) dateNode.textContent = '—';
+      panel.innerHTML = `<div class="faint small">尚未生成校验报告（回填或每日更新后自动产出）</div>`;
+      return;
+    }
+    if (dateNode) dateNode.textContent = quality.trade_date || '';
+
+    const degraded = Boolean(quality.degraded);
+    const errorSymbols = Number(quality.error_symbols || 0);
+    const warnSymbols = Number(quality.warn_symbols || 0);
+    const ratio = Number(quality.error_ratio || 0) * 100;
+    const tone = degraded ? 'sell' : errorSymbols ? 'neutral' : 'strong_buy';
+    const label = degraded ? '已降级' : errorSymbols ? '有告警' : '正常';
+
+    panel.innerHTML = `
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="badge ${tone}">${label}</span>
+        <span class="faint small">ERROR 占比 ${ratio.toFixed(2)}%（门禁 2%）</span>
+      </div>
+      <table class="kv mt-8">
+        <tr><th>校验标的</th><td class="mono">${App.num(quality.symbols, 0)} 只</td></tr>
+        <tr><th>ERROR</th><td class="mono">${App.num(errorSymbols, 0)} 只</td></tr>
+        <tr><th>WARN</th><td class="mono">${App.num(warnSymbols, 0)} 只</td></tr>
+        <tr><th>报告文件</th><td class="mono small">${App.esc(quality.file || '—')}</td></tr>
+      </table>`;
+  }
+
+  function renderCalendar(calendar) {
+    const panel = el('calendar-panel');
+    const rangeNode = el('cal-range');
+    if (!panel) return;
+    if (!calendar || !calendar.exists) {
+      if (rangeNode) rangeNode.textContent = '—';
+      panel.innerHTML = `<div class="faint small">尚未建立交易日历，请执行全量回填</div>`;
+      return;
+    }
+    if (rangeNode) rangeNode.textContent = `${calendar.first_date || '—'} ~ ${calendar.last_date || '—'}`;
+    panel.innerHTML = `
+      <table class="kv">
+        <tr><th>交易日</th><td class="mono">${App.num(calendar.trading_days, 0)} 天</td></tr>
+        <tr><th>日历行数</th><td class="mono">${App.num(calendar.rows, 0)} 行</td></tr>
+        <tr><th>起点</th><td class="mono">${App.esc(calendar.first_date || '—')}</td></tr>
+        <tr><th>终点</th><td class="mono">${App.esc(calendar.last_date || '—')}</td></tr>
+      </table>`;
+  }
+
+  /* ---------------- 覆盖矩阵 ---------------- */
+
+  function coverColor(cell, capacity) {
+    if (!cell) return '#f3f4f6';
+    const t = Math.max(0, Math.min(1, capacity ? cell / capacity : 0));
+    // 0 → 浅灰，1 → 深绿（数据全）
+    const lo = [243, 244, 246];
+    const hi = [46, 138, 96];
+    const rgb = lo.map((l, i) => Math.round(l + (hi[i] - l) * t));
+    return `rgb(${rgb.join(',')})`;
+  }
+
+  function renderCoverage() {
+    const body = el('cover-body');
+    const head = el('cover-table') ? el('cover-table').querySelector('thead tr') : null;
+    if (!body || !state.coverage) return;
+    const cov = state.coverage;
+    const years = cov.years || [];
+    if (!years.length) {
+      body.innerHTML = `<tr><td class="muted" style="padding:24px;text-align:center">尚无覆盖数据</td></tr>`;
+      return;
+    }
+    if (head) {
+      head.innerHTML =
+        '<th style="min-width:170px">标的</th>' +
+        years.map((y) => `<th class="right">${App.esc(y)}</th>`).join('') +
+        '<th class="right">合计</th>';
+    }
+
+    const kw = (el('cover-search') ? el('cover-search').value : '').trim().toLowerCase();
+    const sort = el('cover-sort') ? el('cover-sort').value : 'default';
+    let rows = (cov.symbols || []).filter((s) => {
+      if (!kw) return true;
+      return (
+        String(s.code).toLowerCase().includes(kw) ||
+        String(s.name || '').toLowerCase().includes(kw)
+      );
+    });
+
+    const gapCount = (code) =>
+      years.filter((y) => {
+        const cell = ((cov.matrix || {})[code] || {})[y] || 0;
+        const cap = (cov.year_days || {})[y] || 0;
+        return cap > 0 && cell < cap * 0.95;
+      }).length;
+
+    if (sort === 'code') rows = rows.slice().sort((a, b) => a.code.localeCompare(b.code));
+    else if (sort === 'gap') rows = rows.slice().sort((a, b) => gapCount(b.code) - gapCount(a.code));
+
+    rows = rows.slice(0, 300);
+    body.innerHTML = rows
+      .map((sym) => {
+        const map = (cov.matrix || {})[sym.code] || {};
+        const cells = years
+          .map((y) => {
+            const cell = map[y] || 0;
+            const cap = (cov.year_days || {})[y] || 0;
+            const text = cell ? String(cell) : '·';
+            return `<td style="background:${coverColor(cell, cap)};color:${
+              cell && cap && cell / cap > 0.6 ? '#fff' : 'var(--text)'
+            }" title="${App.esc(sym.code)} ${App.esc(y)}：${cell} 行 / 交易日 ${cap}">${text}</td>`;
+          })
+          .join('');
+        return `<tr>
+          <td class="nowrap small"><span class="mono">${App.esc(sym.code)}</span>
+            <span class="muted">${App.esc(sym.name || '')}</span></td>
+          ${cells}
+          <td class="right mono small">${App.num(sym.total_days, 0)}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+
+  async function loadCoverage() {
+    try {
+      state.coverage = await App.get('/api/data/coverage');
+      renderCoverage();
+    } catch (err) {
+      const body = el('cover-body');
+      if (body) {
+        body.innerHTML = `<tr><td class="muted" style="padding:24px;text-align:center">${App.esc(
+          err.message
+        )}</td></tr>`;
+      }
+    }
+  }
+
+  async function fillOne() {
+    const codeInput = el('fill-code');
+    const startInput = el('fill-start');
+    const hint = el('fill-hint');
+    const btn = el('btn-fill');
+    const code = (codeInput ? codeInput.value : '').trim();
+    if (!code) {
+      App.toast('请先填写标的代码，如 sh.600000', 'error');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      const payload = { code };
+      if (startInput && startInput.value) payload.start = startInput.value;
+      const res = await App.post('/api/data/fill', payload);
+      App.toast('已提交补拉任务 ' + res.job_id);
+      if (hint) hint.textContent = `任务 ${res.job_id} 已排队，进度见下方任务记录。`;
+      const jobs = await App.get('/api/jobs', { limit: 20 }).catch(() => ({ items: [] }));
+      renderJobs(jobs.items);
+      schedulePoll(jobs.items);
+    } catch (err) {
+      App.toast('补拉失败：' + err.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function reload() {
     const btn = el('btn-refresh');
     if (btn) btn.disabled = true;
@@ -191,9 +356,13 @@ const DataPage = (() => {
       state.symbols = status.symbols || [];
       renderStats(status);
       renderDatasets(state.datasets);
+      renderQuality(status.quality);
+      renderCalendar(status.calendar);
       renderIndustryOptions();
       renderSymbols();
       renderJobs(jobs.items);
+      schedulePoll(jobs.items);
+      loadCoverage();
       state.loaded = true;
     } catch (err) {
       App.toast('数据状态加载失败：' + err.message, 'error');
@@ -209,6 +378,24 @@ const DataPage = (() => {
     }
   }
 
+  /** 有任务在跑时自动轮询，让进度条动起来 */
+  let pollTimer = null;
+  function schedulePoll(items) {
+    const active = (items || []).some((j) => j.status === 'pending' || j.status === 'running');
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    if (!active) return;
+    pollTimer = setTimeout(async () => {
+      const jobs = await App.get('/api/jobs', { limit: 20 }).catch(() => null);
+      if (jobs) {
+        renderJobs(jobs.items);
+        schedulePoll(jobs.items);
+      }
+    }, 3000);
+  }
+
   function filter() {
     const search = el('symbol-search');
     const industry = el('symbol-industry');
@@ -217,16 +404,40 @@ const DataPage = (() => {
     renderSymbols();
   }
 
+  async function submitJob(kind, params) {
+    try {
+      const res = await App.post('/api/jobs', { kind, params });
+      App.toast(`已创建任务 ${res.job_id}`);
+      const jobs = await App.get('/api/jobs', { limit: 20 }).catch(() => ({ items: [] }));
+      renderJobs(jobs.items);
+      schedulePoll(jobs.items);
+      return res;
+    } catch (err) {
+      App.toast('创建任务失败：' + err.message, 'error');
+      return null;
+    }
+  }
+
   async function triggerUpdate() {
     const btn = el('btn-update');
     if (btn) btn.disabled = true;
     try {
-      const res = await App.post('/api/jobs', { kind: 'update', params: {} });
-      App.toast(`已创建更新任务 ${res.job_id}（执行器将在 P1 接入）`);
-      const jobs = await App.get('/api/jobs', { limit: 20 }).catch(() => ({ items: [] }));
-      renderJobs(jobs.items);
-    } catch (err) {
-      App.toast('创建任务失败：' + err.message, 'error');
+      await submitJob('update', {});
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function triggerBackfill() {
+    const ok = window.confirm(
+      '全量回填会拉取沪深300 全部历史行情、复权因子、近 5 年估值与财务数据。\n\n' +
+        '首次运行约需 20~40 分钟（取决于网络），期间可继续使用其他页面。\n\n确认开始？'
+    );
+    if (!ok) return;
+    const btn = el('btn-backfill');
+    if (btn) btn.disabled = true;
+    try {
+      await submitJob('backfill', { start: '2008-01-01', valuation_years: 5 });
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -234,5 +445,5 @@ const DataPage = (() => {
 
   document.addEventListener('DOMContentLoaded', reload);
 
-  return { reload, filter, triggerUpdate };
+  return { reload, filter, triggerUpdate, triggerBackfill, renderCoverage, fillOne };
 })();

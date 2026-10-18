@@ -196,6 +196,11 @@ data/
 2. **基准是价格指数**（沪深300 不含分红），而策略用后复权（含分红再投），策略天然有约 1.5%/年的口径优势。报告中注明；若后续拿到全收益指数（H00300）则切换。
 3. 东财估值在 2008~2010 覆盖不全，早期估值维缺失较多，`data_quality` 会体现。
 4. baostock 会重算历史复权因子，跨版本回测结果可能有小幅差异 → 结果绑定因子快照版本。
+5. **复权因子存在「非单调」区间**。实测 HS300 中 6 只（`sh.600372`/`sh.600760`/`sh.601607`/`sz.000001`/`sz.000002`/`sz.000568`）的 `backAdjustFactor` 会下调，例如平安银行 2020-12-31 从 119.96 降到 99.79（-16%）。
+   - 已验证：这不是本地算错 —— baostock 官方后复权价（`adjustflag=1`）在同一天同样跳变，我方结果与之逐位一致（最大差 4.5e-13）。
+   - 影响：该日**前后**的后复权价不可直接比较，长周期收益会有偏差。校验器以 `R2.9` WARN 提示，回测报告需披露。
+6. **停牌日 baostock 返回空字符串**。`tradestatus=0` 的行 `volume/amount/turn/pctChg` 是空串而非 `0`，已在本源补齐为 0（语义即「无成交」）；OHLC 保留停牌前收盘价。回测需按 `tradestatus=0` 或「四值全等且量 0」剔除，否则会产生假信号。
+7. **新股上市初期不设涨跌幅限制**。主板新股上市前 5 个交易日、双创前 5 个交易日无涨跌停，首日涨幅可达 100%+（实测 `sh.600930` 华电新能 2025-07-16 首日 +125.79%）。校验器会以 `R2.7` WARN 提示人工复核，属正常。
 
 ---
 
@@ -295,6 +300,14 @@ Factor(
 - 版本号 `v{major}.{minor}.{patch}`，配置存 `config/scoring/v1.0.0.yaml`（权重 + 因子清单）。
 - 每次打分写入 `score_daily`，同时 `score_versions` 记录 `config_yaml / factor_set / data_snapshot / created_at / note`。
 - 历史分可随时用旧版本重算（因子代码不变时结果可复现）。
+- **因子口径变更必须升 minor**：v1.0.0 → v1.1.0 修正了 `downside_vol` 的缺失值口径
+  （`where(ret<0, 0.0)` 把 NaN 改成 0 → 未上市股票被评为「零风险」，经 `direction=-1`
+  反向标准化后拿最高分，霸占 top-N）。因子清单、权重、公式都没变，只改缺失值语义，
+  所以旧版本快照 `data/snapshots/score/version=v1.0.0` 原样保留作对照，
+  `config/app.yaml` 的 `scoring.default_version` 已指向 v1.1.0。
+  **两份数据不可混用**（同一只股票在两个版本下的 `score_pct` 不可比）。
+- 重算规模：v1.1.0 全量 367,714 行（v1.0.0 为 375,000 行，差的 7,286 行正是
+  「所有维度都缺失、不该进快照」的未上市股票）。
 
 ### 5.7 评价体系
 
@@ -368,9 +381,32 @@ Factor(
 
 - 目标权重按 `weight_method` 计算；
 - 卖出先于买入结算（先释放现金再买）；
-- 权重按 T+1 开盘价折算股数并取整到 100 股；
+- 权重按 T+1 **不复权**开盘价折算股数并向下取整到 100 股；
 - 若总资金不足，按权重比例等比缩减；
-- 单票权重上限 `max_weight` 生效后，超出部分按比例分给其余标的。
+- 单票权重上限 `max_weight` 生效后，超出部分按比例分给其余标的；
+- **不临时补配**：被涨跌停/停牌/整手/资金挡下的那一份权重留在现金里，绝不分给别的股票
+  （否则「目标权重」就不是信号日算定的那个配方，回测不可复现）。
+
+#### 记账空间（两层，各自自洽）
+
+| 层 | 单位 | 用途 |
+|---|---|---|
+| 现金 | **真实元** | 资金进出、佣金 5 元下限、印花税、买得起几手 |
+| 持仓 | **后复权价 × time-0 股数** | 净值曲线（自带红利再投资，与因子面板同口径） |
+
+- `time-0 股数 eff`：买入 `eff += 股数 / back_factor(当日)`，卖出 `eff -= 股数 / back_factor(当日)`；
+  持仓市值 = `eff × 后复权价(t)`，**当前持股数** = `eff × back_factor(t)`（除息后同比增加）。
+- 为什么这样记账自洽：后复权价 `adj(t) = 不复权价(t) × f(t)` 的含义是「1 股自上市持有、
+  分红再投、到 t 日的真实现金价值」。于是买卖瞬间 `(股数/f) × (p×f) = 股数 × p`，
+  与现金扣减**严格相等**，净值曲线连续，不会在每次调仓时跳变。
+- ⚠️ **不要**用「后复权净值 / 后复权价」算股数：那等于把真实现金按个股的 back_factor
+  缩水。实测 HS300 5 年回测只投出去 14.5% 的资金、平均持仓 10 只而 top_n=20，
+  而报告上看不出来（权重按复权市值算是「齐」的）。回归测试见
+  `tests/unit/test_backtest_engine.py::TestBackFactorAccounting`。
+- 不足一手的残值留在账上继续计净值，但不参与交易（与真实券商行为一致），
+  报告里的 `shares` 一律是整手。
+- 费用按**名义金额**算、返回真实元：`佣金 ≥ max(名义×0.025%, 5)`，卖出加 `名义×0.05%`
+  印花税，双边 `名义×0.05%` 滑点。
 
 ### 6.4 绩效指标
 
@@ -398,7 +434,7 @@ Factor(
   "metrics": {"is":{...},"oos":{...},"full":{...}},
   "trades": [{"date":"...","code":"...","side":"buy","price":0,"shares":0,"amount":0,"fee":0,"reason":"rebalance"}],
   "holdings": [{"date":"...","code":"...","weight":0.05}],
-  "blocked": {"buy":0,"sell":0,"suspended":0},
+  "blocked": {"buy":0,"sell":0,"suspended":0,"cash":0,"no_data":0,"lot":0},
   "grid": [{"top_n":20,"rebal_days":20,"regime":true,"is_sharpe":1.2,"oos_sharpe":0.8}],
   "warnings": ["survivorship_bias=true"]
 }
@@ -516,10 +552,10 @@ baostock, TA-Lib, PyYAML, requests, scipy, pyportfolioopt
 | 阶段 | 内容 | 交付 | 验收标准 | 人日 | 状态 |
 |---|---|---|---|---|---|
 | **P0 骨架** | 清理交易/实盘/AI/MCP；新目录；配置；4 页空壳 | 可启动的 Web | `python run.py` 打开 4 页无报错 | 2 | ✅ |
-| **P1 数据地基** | providers、lake、universe、calendar、adjustment、validator、回填脚本、增量更新 | 完整本地数据仓 | 一键回填 HS300 全历史；重复运行不破坏历史；覆盖报告正确 | 5~6 | ⬜ |
-| **P2 打分 v1** | panels、indicators、14 个技术因子、标准化、合成、快照 | 每日打分 | 全历史重算 < 30s；同日两次运行结果完全一致 | 6~7 | ⬜ |
-| **P3 回测** | 组合回测引擎、指标、IS/OOS、网格 | 回测中心后端 | 合成数据手工核对净值一致；3 个调仓日人工复核成交 | 5~6 | ⬜ |
-| **P4 前端** | 4 页全部交互 | 可用界面 | 页面可触发更新/看榜/跑回测，无控制台错误 | 6~7 | ⬜ |
+| **P1 数据地基** | providers、lake、universe、calendar、adjustment、validator、回填脚本、增量更新 | 完整本地数据仓 | 一键回填 HS300 全历史；重复运行不破坏历史；覆盖报告正确 | 5~6 | ✅ |
+| **P2 打分 v1** | panels、indicators、19 个技术因子、标准化、合成、快照 | 每日打分 | 全历史重算 < 30s；同日两次运行结果完全一致 | 6~7 | ✅ |
+| **P3 回测** | 组合回测引擎、指标、IS/OOS、网格 | 回测中心后端 | 合成数据手工核对净值一致；3 个调仓日人工复核成交 | 5~6 | ✅ |
+| **P4 前端** | 4 页全部交互 | 可用界面 | 页面可触发更新/看榜/跑回测，无控制台错误 | 6~7 | ✅ |
 | **P5 六维 + 评价** | 估值/质量因子（公告日对齐）、IC/分层/相关性 | 完整打分 + 评价 | 六维可回溯；因子 IC 表产出；无前视（抽查 3 期财报） | 5~6 | ⬜ |
 | **P6 调度与打磨** | 每日任务链、重试、日报、文档 | 生产可用 | 连续 3 个交易日自动运行成功 | 2~3 | ⬜ |
 | | **合计** | | | **31~37** | |
@@ -551,6 +587,227 @@ NODE_PATH=<node-workspace>/node_modules node scripts/frontend_smoke.cjs http://1
 NODE_PATH=<node-workspace>/node_modules node scripts/frontend_smoke.cjs http://127.0.0.1:5174 --data
 ```
 
+### P1 完成记录（2026-10-18）
+
+**交付物**
+
+| 模块 | 文件 | 说明 |
+|---|---|---|
+| 代码归一 | `core/codes.py` | 12 种写法归一、板块判定、涨跌停幅度（主板 10% / 创业板 20% / 科创板 20% / 北交所 30% / ST 5%） |
+| 数据源封装 | `core/providers/{base,baostock_provider,eastmoney_provider}.py` | 限速 + 重试 + 连接韧性；baostock 日线/因子/日历/成分/基础信息；东财估值横截面与财务（含公告日） |
+| 交易日历 | `core/calendar.py` | 拉取、区间查询、前后交易日、shift、覆盖率；无日历时退化工作日 |
+| 标的池 | `core/universe.py` | 成分快照（月度不可变）+ 上市退市日 + 行业 + ST 标记 |
+| 复权 | `core/adjustment.py` | 事件表 → 面板级因子展开（点-in-time）、后复权/前复权、完整性体检 |
+| 编排 | `core/ingest.py` | 7 步全量回填 + 每日增量 + 校验报告 |
+| 任务执行 | `core/jobs.py` | 单线程串行执行器（免费数据源本来只能串行），支持取消 |
+| CLI | `scripts/backfill.py`、`scripts/update_daily.py`、`scripts/_cli.py` | 进度条、覆盖表、写 `job_runs` |
+| 前端接入 | `templates/data.html`、`static/js/data.js` | 全量回填按钮、数据质量卡片、交易日历卡片、任务进度轮询 |
+
+**真实回填结果（HS300，2026-10-18 执行）**
+
+| 数据集 | 行数 | 区间 | 备注 |
+|---|---|---|---|
+| bars | 1,048,825 | 2008-01-02 ~ 2026-10-16 | 300 只，平均 3,496 行/只；不复权 OHLCV + `preclose/turn/tradestatus/pct_chg/is_st` |
+| adj_factor | 5,699 | 全历史 | 300 只，6 只因子非单调（数据源重算，见下） |
+| valuation | 357,432 | 2021-10-18 ~ 2026-10-16 | 逐日横截面，1,212 个交易日 |
+| fundamental | 23,100 | — | 300 只，77 期/只；公告日估算 52 期（0.2%） |
+| universe | 300 | — | 行业覆盖 300/300 |
+| calendar | 6,896 | 2008-01-01 ~ 2026-11-17 | 4,586 个交易日 |
+
+耗时：bars 2,483s（8.3s/只）、估值 1,442s（1.2s/天）、财务 94s、因子 59s。
+
+**数据质量（`data/quality/report_20261016.json`）**
+
+`ERROR 0 只 / WARN 20 只 / degraded=false / error_ratio=0`。20 只 WARN 全部是真实业务现象：
+
+- 19 只是**停牌填充行**（`OHLC` 四值全等且成交量为 0），符合 R2.6 预期语义；
+- 1 只是 `sh.600930` 华电新能，2025-07-16 上市，主板新股**上市前 5 个交易日不设涨跌幅限制**，2025-07-21 涨 13.68% 合法。
+
+**幂等与断点续传验证**
+
+```bash
+# 重复运行：300 只全部「已最新」，写入 0 行，总量不变
+scripts/backfill.py --start 2008-01-01 --only bars --only adj_factor
+#   ✓ 写入 0 行，已最新 300 只，失败 0 只（0.4s）
+#   ✓ 5,699 条事件（重跑后仍 5,699，无重复）
+
+# 断点续传：删除 2 只后重跑，只补差额
+#   ✓ 写入 9,772 行，已最新 297 只，失败 0 只（38.0s）
+```
+
+**P1 踩过的坑（已全部修复并加回归测试）**
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | `日期格式不正确，请修改。` | `str(pd.Timestamp())` 产出 `2026-10-16 00:00:00`，baostock 不接受带时分秒 | `ingest._day()` 统一 `strftime("%Y-%m-%d")` |
+| 2 | 回填慢 3~5 倍（每只 10~27s） | `daily_bars` 每次调用都包一层 `session()`，等于每只都 `login`+`logout` | 整个循环包在 `with provider.session():` 里，只登录一次 |
+| 3 | 进程永久挂死（无输出、无异常） | baostock `send_msg` 用裸 socket `while True: recv(8192)`，**无超时** | `socket.setdefaulttimeout(45)` + 网络故障时 `_hard_close()` 强制关 socket 并重连 |
+| 4 | `'utf-8' codec can't decode byte 0x8f` | `send_msg` 把 socket 异常**全部吞掉**转成错误码，超时点在 recv 循环中间时缓冲区留着半个包 | 识别错误文案（`网络接收错误` 等）主动重置连接 |
+| 5 | 19 只 `R1.5 Volume 存在 NaN` | 停牌日（`tradestatus=0`）baostock 给的是**空字符串**不是 `0` | `_normalize_bars` 对停牌行补 0；`volume` 转 `int64` |
+| 6 | 300/300 只 `R1.6 Volume 为浮点类型` | 规则只看 dtype，而 float64 存 2^53 内整数完全精确 | 改为只在存在**非整数值**时告警 |
+| 7 | 140/300 只 `R2.7 涨跌幅超阈值` | 低价股一分钱就能顶出可观百分比（包钢 2.29→2.52 = 10.0437%） | 按 `max(0.5%, 1.5 × 0.01/前收盘)` 放宽软阈值 |
+| 8 | 298/300 只 `R2.8 日期间隔 > 5 天` | 用自然日间隔判，春节/国庆必然超 5 天 | 有日历时改判「相邻数据日之间是否遗漏交易日」；无日历时阈值放到 12 天 |
+| 9 | 行业覆盖 0/300 | 用 `today()` 查东财横截面，周末无数据 | 改用最近交易日；并加「往前回退最多 7 天」兜底 |
+| 10 | 报「写入 3,830,212 行」实际只有 104.8 万 | `Lake.write` 返回的是**分区总行数**，分批写时被累加 | 改为统计本次从数据源取到的行数 |
+| 11 | `sz.302132` 涨跌停按 10% 判 | 创业板代码段 2024 年后扩到 `302`，只认 `300/301` | `board_of` 补 `302` 段 |
+
+**P1 验收命令**
+
+```bash
+**.venv/Scripts/python.exe -m pytest -q                       # 334 passed
+.venv/Scripts/python.exe scripts/backfill.py --start 2008-01-01 --valuation-years 5
+.venv/Scripts/python.exe scripts/update_daily.py            # 非交易日 exit 0
+DELTAF_PORT=5173 .venv/Scripts/python.exe run.py &
+.venv/Scripts/python.exe scripts/smoke_test.py              # 4 页 + 16 接口
+```
+
+### P3 完成记录（2026-10-18）
+
+**交付物**
+
+| 模块 | 文件 | 说明 |
+|---|---|---|
+| 成本模型 | `core/backtest/costs.py` | 佣金万2.5(最低5)+印花税卖出万5+滑点万5；`trade_cost` 按名义金额返回真实元；`max_affordable_shares` 为费用预留现金；`round_lot` 整手取整 |
+| 绩效指标 | `core/backtest/metrics.py` | 收益/年化/波动/Sharpe/Sortino/MDD/Calmar/月胜率/超额/IR/换手；`downsample_equity` 周度降采样；IS/OOS 自洽校验（容差随量级自适应） |
+| 策略层 | `core/backtest/strategies.py` | 信号日选取、等权/得分加权、`cap_and_redistribute` 封顶再分配、regime 三档敞口、整行 NaN 快照跳过不清仓 |
+| 回测引擎 | `core/backtest/engine.py` | T+1 开盘成交、先卖后买、整手取整、六类 `blocked` 记账、逐日净值（见 §6.3 记账空间） |
+| 编排 | `core/backtest/runner.py`、`scripts/backtest.py` | 主回测 + 32 组参数网格 + 时间预算保护 + 落盘 + experiments |
+| API 接入 | `api/backtest_api.py` | GET/POST `/api/backtests`、GET/DELETE `/api/backtests/<id>`；`RuntimeError/ValueError → 400 backtest_failed` |
+| 前端 | `backtest.html` / `backtest.js` | 从「P3 阶段接入」改为已接入的真实列表/详情/运行 |
+
+**真实数据验收（HS300，5 年，2026-10-18 执行，打分版本 v1.1.0）**
+
+| 项 | 结果 |
+|---|---|
+| 区间 | 2021-10-18 ~ 2026-10-16（IS 2021-10-18~2025-04-15 / OOS 2025-04-16~2026-10-16） |
+| 净值 | full +24.18%（年化 4.57%）、IS -8.33%、OOS +35.47% |
+| 风险 | Sharpe 0.378、Sortino 0.236、MDD -23.05%、Calmar 0.091 |
+| 对比 | 沪深300 -14.45%，超额 +38.63%，IR 0.454，月胜率 41% |
+| 交易 | 1,233 笔全整手；换手 9.08x/年；平均持仓 11.22（top_n=20，受 regime 与整手约束） |
+| 阻挡 | buy=2（涨停）、sell=1（跌停）、no_data=0、cash=0、lot=23、suspended=0 |
+| 告警 | 仅 1 条：23 次目标金额买不起一手（高价股真实约束） |
+
+**账本守恒验收（规格 §11「手工核对净值一致」的实数形式）**
+
+把 1,233 笔成交按「真实现金 ± 股数×不复权价 ± 费用」逐日回放，持仓按
+`time-0 股数 × 当日 back_factor` 计市值，与引擎的 1,212 天完整净值对比：
+**最大绝对偏差 0.10 元 / 最大相对偏差 1.1e-7**（仅来自成交价四舍五入到分）。
+`equity` 在 JSON 里按周降采样（约 256 点，规格 §6.7 上限），指标用完整 1,211 天序列。
+
+**三个调仓日人工复核（逐笔对数据湖核对）**
+
+| 调仓日 | 成交 | 成交价 vs 湖内不复权开盘价 | 金额=股数×价 | 费用逐笔 | 非整手 | 权重和 |
+|---|---|---|---|---|---|---|
+| 2023-03-13 | 34 笔（买16/卖18） | 0 笔不符 | 0 笔不符 | 0 笔不符 | 0 | 0.4587（regime 半仓） |
+| 2023-04-11 | 37 笔（买20/卖17） | 0 笔不符 | 0 笔不符 | 0 笔不符 | 0 | 0.9436（满仓） |
+| 2025-04-07 | 39 笔（买20/卖19） | 0 笔不符 | 0 笔不符 | 0 笔不符 | 0 | 0.9830（满仓，单票 0.0254~0.0500） |
+
+费用核对口径：`佣金 ≥ max(名义×0.00025, 5)` + 双边滑点 `名义×0.0005` + 卖出印花税 `名义×0.0005`。
+
+**P3 修掉的真 bug（全部有回归测试）**
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 未上市股票以 99 分霸占 top-N | `downside_vol` 用 `where(ret<0, 0.0)` 把 NaN 也改成 0，而该因子 `direction=-1`，「零风险」经反向标准化变最高分 | 改 `clip(upper=0.0)` 保留 NaN；新增 `config/scoring/v1.1.0`（因子清单不变，只改缺失值口径），旧 v1.0.0 快照保留作对照；重算 367,714 行 |
+| 2 | 5 年回测只投出去 **14.5%** 资金，平均持仓 10 只而 top_n=20 | 用「后复权净值 / 后复权价」算股数，等于把真实现金按个股 back_factor 缩水（f=50 时只买到 1/50 仓位） | 改按不复权价算股数 + 两层记账（§6.3）；`lot` 拦阻 255→23 |
+| 3 | 除息后清仓留下 77 只幽灵持仓、净值虚高 | `shares` 记原始股数，除息后等效股数翻倍但原始股数不变，清仓只卖掉一半 | 对外股数改用 `time-0 股数 × 当日因子`，并向下取整到一手 |
+| 4 | 成交记录里的整数股数无法复算出净值（差 2,293 元） | `"shares": int(count)` 截断了非整手的等效股数 | 交易与报告一律整手；不足一手的残值留在账上但不参与交易 |
+| 5 | 回测前约 200 天择时恒判定「半仓」 | `bench_close` 只读了回测窗口内的指数行情，MA200 恒 NaN → 触发「均线未成型 → 0.5」 | 多读 500 个自然日历史供均线使用 |
+| 6 | 现金耗尽时静默跳过加仓 | `min(desired-held, affordable)` 让 `affordable=0` 时既不成交易也不计数 | 拆开 `gap` 与 `affordable`，记 `blocked["cash"]` + 告警 |
+| 7 | 下调权重的超配股永不砍仓 | 卖出阶段只清「不在目标里的」 | 卖出也「减到目标股数」 |
+| 8 | 缺一天打分快照就清仓 | 整行 NaN 被当成「看空」 | 跳过该次调仓维持持仓；整行无数据才明确空仓 |
+| 9 | Sharpe = 8.6e16 | 常数值序列 `std(ddof=1)` ≈ 1e-18，`vol > 0` 守卫失效 | `VOL_EPS = 1e-12` |
+| 10 | IS/OOS 自洽误报 0.07pp | 收益翻几倍时两位小数舍入被 `(1+a)(1+b)` 放大 | 容差随量级自适应 `max(0.05, 0.03×(2+\|a\|+\|b\|))` |
+| 11 | `max_weight×top_n < 1` 直接抛 ValueError | 网格 `top_n=5` + 默认 0.10 组合法却报错 | 改为 `warnings()` 告警并写进 `result.warnings` |
+| 12 | `run(cfg=X)` 半全局 | `lake`/`store` 回落 `get_lake()`/`get_score_store()`，CLI 静默读到真实仓库 | 改为 `Lake(cfg)` / `ScoreStore(cfg)` |
+| 13 | 创业板 + `pd.Timestamp` 崩 TypeError | `_as_date` 不把 Timestamp 降级成 `date` | `isinstance(value, datetime) → value.date()` |
+
+**已知限制（写进报告，不是 bug）**
+
+1. **一手门槛**：`目标金额 / 不复权价 < 100 股` 就买不了（真实 A 股约束）。top_n=20 +
+   100 万本金下 23 次发生，权重留现金；`加大 initial_cash 或调低 top_n 可缓解`。
+2. **红利再投的时点**：模型把分红视为自动再投成股份（后复权口径），真实券商是现金到账。
+   HS300 年化约 2~3%，调仓周期 20 天内会再投入，差异有限。
+3. **幸存者偏差**：HS300 历史成分不可得，靠每月快照缓解。
+4. **基准是价格指数**（不含分红），策略用含分红再投口径，天然有约 1.5%/年优势，
+   已在 `metrics.bench_return` 旁注明。
+
+**P3 验收命令**
+
+```bash
+.venv/Scripts/python.exe -m pytest -q                       # 613 passed
+.venv/Scripts/python.exe scripts/score.py --full            # 全量重算打分
+.venv/Scripts/python.exe scripts/backtest.py                # 主回测 + 32 组网格
+.venv/Scripts/python.exe scripts/backtest.py --no-grid --json   # 只看主回测
+# API 全链路
+python -c "from backend.app import create_app; c=create_app().test_client(); \
+           print(c.post('/api/backtests', json={'grid': False}).status_code)"   # 201
+```
+
+---
+
+### P4 完成记录（2026-10-18）
+
+**交付物**
+
+| 页面 | 区块 | 文件 |
+|---|---|---|
+| 首页 | 4 张状态卡（含数据质量 ERROR/WARN）、快捷入口（触发数据更新）、Top10/Bottom10 榜、行业平均分热力条、评级分布、最近任务、数据集 chips | `templates/index.html`、`static/js/index.js` |
+| 数据管理 | 标的明细表、**年份 × 标的覆盖矩阵热力图**（可排序/搜索）、数据质量卡 + **导出校验报告**、**单个标的补拉**、交易日历、任务记录 | `templates/data.html`、`static/js/data.js` |
+| 每日打分 | 榜单 + 行业均分；抽屉新增 **六维雷达图**、**K 线（前复权 + 成交量）**、**关键指标**（PE/PB/PS/总市值/ROE/营收·净利同比/毛利率/股息率/ATR%） | `templates/scores.html`、`static/js/scores.js` |
+| 回测中心 | 参数表单（权重方式/择时开关/分位门槛/IS 切分/网格开关）+ 运行态（禁用 + 计时）；**结果详情七区块**（指标卡 8 张、净值+回撤阴影、年度收益、IS/OOS 表、参数网格热力图、持仓历史、交易明细）；**历史两条曲线对比** | `templates/backtest.html`、`static/js/backtest.js` |
+
+**新增/扩充接口**
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/data/coverage` | 年份 × 标的 的覆盖矩阵（格内数字 = 该年有行情的交易日数；含每年的交易日容量 `year_days`） |
+| `GET /api/data/quality/export` | 最近一次校验报告原样下载（`Content-Disposition: attachment`） |
+| `POST /api/data/fill` | 单只标的补拉：校验代码存在于标的表 → 提交 `update` 任务并带 `params.code` |
+| `GET /api/scores/<code>`（扩充） | 新增 `kline`（120 日前复权 K 线）与 `indicators`（估值/财务/ATR） |
+
+**底层能力补充**
+
+- `Lake.read(filters=[...])`：把行级过滤下推给 pyarrow（支持 `= != > >= < <= in`）。个股抽屉原先要把 20 万行的 `adj_factor` 整表拉进 pandas 再切片（0.7s），下推后 0.05s。
+- `ScoreStore.read_tail` 加进程内缓存（按 `(版本, days)` 缓存合并表，TTL 120s，写入时作废）。按日一文件让「读最近 250 天」= 打开 250 个 parquet，固定开销 0.55s，与读多少列无关；缓存后二次访问 0.01s。
+- `Ingest.fill_symbol()`：只拉一只票的日线 + 复权因子 + 当日估值，不重刷 300 只。
+
+**验收结果**
+
+| 项 | 结果 |
+|---|---|
+| 单元测试 | **636 passed**（新增 23：P4 接口 13 + lake filters 6 + 快照缓存 4） |
+| 前端运行时冒烟 | 4 页无 JS 错误；数据渲染 4 项；交互 4 项（抽屉 / 回测详情 / 覆盖矩阵 / 首页榜单）全 PASS |
+| DOM 一致性 | `check_dom_ids.py` 一致（JS 引用 95 个 id，模板提供 133 个，8 处方法调用全部有定义） |
+| 回测基线未回归 | 真实 HS300 5 年：+24.18% / 年化 4.57% / Sharpe 0.378 / MDD -23.05% / 1233 笔 / 1212 净值点，与 P3 基线逐位一致 |
+| 账本守恒 | 逐笔回放最大绝对偏差 **0.10 元**、相对 **1.1e-7**，与 P3 相同 |
+
+**P4 修掉的 4 个真 bug**
+
+| # | 问题 | 后果 | 修法 |
+|---|---|---|---|
+| 1 | `_kline` 以 `pd.Timestamp.today()` 为时间锚 | 翻看历史某天的打分时，抽屉里画的是**今天**的 K 线（未来函数）；数据湖时间戳与「今天」拉开时直接返回空数组 | 以**打分快照日**为基准 |
+| 2 | 前复权因子按 DataFrame 位置索引对齐 | 整列取不到值 → 退化成 1.0 → 画的是**不复权**价，除权日一条腰斩的假跳空 | 统一用 `DatetimeIndex` 对齐 + `ffill` 前值填充 |
+| 3 | K 线回看窗口只有 `120×2` 自然日 | 长期停牌或翻看旧快照时，需要的 K 线被切掉 | 放宽到 `120×3 + 90` 天，再 `tail(120)` 兜底 |
+| 4 | `lake.read` 无行级过滤 | 个股抽屉每次多付 0.7s 全表扫描 | `filters` 下推到 pyarrow |
+
+**已知限制**
+
+1. 参数网格热力图固定 `top_n × rebal_days × regime` 三个维度（32 组），不随主回测参数变化。
+2. 回测记录里早期（P3 期间用旧参数跑的）记录 `grid` 为空，详情页会给出降级说明而不是空白。
+3. K 线只有 120 根，不支持缩放看更长历史（抽屉的性能预算内）。
+4. 覆盖矩阵默认只画前 300 只（当前标的池正好 300，超出会截断）。
+5. 图表依赖 CDN 的 echarts 5.5.0，离线环境下图表区域为空（jsdom 冒烟用桩替代）。
+
+**P4 验收命令**
+
+```bash
+.venv/Scripts/python.exe -m pytest -q                                  # 636 passed
+.venv/Scripts/python.exe scripts/check_dom_ids.py                      # 一致
+.venv/Scripts/python.exe run.py &                                      # :5000
+NODE_PATH=<node-workspace>/node_modules node scripts/frontend_smoke.cjs http://127.0.0.1:5000 --data
+```
+
 ---
 
 ## 11. 测试策略
@@ -577,6 +834,51 @@ NODE_PATH=<node-workspace>/node_modules node scripts/frontend_smoke.cjs http://1
 | 基准为价格指数 | 超额被高估约 1.5%/年 | 报告注明；后续切全收益指数 |
 | 早期估值覆盖不足 | 2010 前估值维大量缺失 | `data_quality` 标注，权重自动再归一 |
 | TA-Lib 安装失败 | 指标不可用 | 已确认当前环境可用；文档写明 Windows 安装方式 |
+
+### P2 完成记录（2026-10-18）
+
+**新增模块**：`backend/core/panels.py`（长表→宽表容器）、`indicators.py`（talib 面板封装）、
+`factors.py`（19 因子 + registry）、`scoring.py`（标准化/合成/分档）、`scorer.py`（编排）、
+`scripts/score.py`（CLI）；`lake.py` 增 `index_bars`，`jobs.py` / `job_api.py` 接入 score 任务，
+`snapshots.py` 增 `read_tail`。
+
+**实测结果**
+
+| 指标 | 结果 | 预算 |
+|---|---|---|
+| 全量重算（4564 日 × 300 只，19 因子 + 标准化） | 16.0s（含写最近 1250 天快照） | < 30s |
+| 单日增量 | 1.5s | — |
+| 同模式两次运行 | `score_pct`/`score_abs`/`data_quality`/`grade`/四维分**逐位一致** | 完全一致 |
+| 增量 vs 全量（420 交易日窗口） | 300/300 完全一致，diff=0.0 | — |
+| 评级分布 | 中性 120 / 看空 60 / 看多 60 / 强烈看多 31 / 强烈看空 29 | 与 40/20/20/10/10 吻合 |
+| 测试 | 482 passed（P1 334 + P2 新增 148） | — |
+| 前端冒烟（--data） | 4 页全过；`/scores` 渲染 300 行 + 76 个行业 | — |
+
+**阶段中定位并修复的 6 个问题**（均已加回归测试）
+
+1. `Panels.subset` 在无基准指数（`bench_ret` 为空）+ 日期切片时抛
+   `Invalid comparison between dtype=object` —— 空 Series 的 index 是 object dtype。
+2. `apply_per_column` 把 NaN 缺口前后的有效值**拼成一段**再喂 talib：`[1..10, NaN×5, 101..110]`
+   算 SMA(3) 第 11 个值变成 `mean(9,10,101)=40`。停牌前后价格被混在一起，复牌后头几天的
+   SMA/MACD/ADX 全被污染。改为按连续段切分（新增 `_runs()`），`adx/mfi/obv/atr` 同步修。
+3. `rs_60` 的 `bench.reindex(...).cumprod()`：pandas 的 cumprod 会把首个 NaN 留在
+   `growth[0]`，于是 `bench_growth[60] = NaN`，整整一个交易日的 rs_60 静默消失。
+   改为 `fillna(0)`（缺数据日按「指数无变化」处理）。
+4. `record_job` 的 `log` 参数类型（dict → JSON 字符串）；`meta_db` 方法名
+   `save_score_version` → `add_score_version`。
+5. 全量打分 55s 超预算：快照按日一文件，写 4550 个目录的 I/O 比计算还慢（44s vs 12s）。
+   加 `scoring.snapshot_days: 1250`，**计算仍全历史**，只控制落盘规模。
+6. 增量窗口 300 自然日只够约 200 个交易日 < 最大 lookback 260：改为按交易日历
+   `calendar.shift()` 精确回溯，并把 `LOOKBACK_BUFFER` 定为 160（共 420 交易日，
+   实测 400 天起差异归零，300/300 一致）。
+
+**已知口径**（写在代码注释与 diagnostics 里，不改行为）
+
+- 行业中性 76 个行业、平均 3.95 只：181 只走行业内分位，119 只（40%）因样本 <5
+  退回全市场分位 —— `min_industry_samples=5` 的必然结果。
+- `data_quality` 是双峰分布（四维齐全 = 1.0，早期只有 risk = 0.15），
+  统计口径取「四维齐全的股票×日格子占比」。
+- 规格 §5.2 标题写「14 个因子」，但表格与配置都是 19 个（6+5+4+4），按配置实现。
 
 ---
 

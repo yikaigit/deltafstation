@@ -73,11 +73,14 @@ def main() -> int:
         if "not-exist" in path or "nonexistent" in path:
             expect = 404
         elif method == "POST" and "backtests" in path:
-            expect = 501
+            # P3 之前这里是 501 占位；接口实现后，空载荷会真跑一次回测（201），
+            # 没数据/没快照时是 400。两者都算通过 —— 关键是别回落到 5xx。
+            expect = 201
         elif method == "POST" and "jobs" in path:
             expect = 201
 
-        ok = has_shape and (res.status_code == expect or code in graceful)
+        ok = has_shape and (res.status_code == expect or code in graceful
+                            or (method == "POST" and "backtests" in path and res.status_code == 400))
         detail = ""
         if payload and payload.get("ok") is False:
             detail = (payload.get("error") or {}).get("code", "")

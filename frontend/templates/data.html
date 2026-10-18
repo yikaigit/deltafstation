@@ -9,7 +9,8 @@
   </div>
   <div class="page-actions">
     <button class="btn" id="btn-refresh" onclick="DataPage.reload()">刷新</button>
-    <button class="btn btn-primary" id="btn-update" onclick="DataPage.triggerUpdate()">触发增量更新</button>
+    <button class="btn" id="btn-backfill" onclick="DataPage.triggerBackfill()">全量回填</button>
+    <button class="btn btn-primary" id="btn-update" onclick="DataPage.triggerUpdate()">增量更新</button>
   </div>
 </div>
 
@@ -33,6 +34,79 @@
     <div class="stat-label">数据集就绪</div>
     <div class="stat-value" id="d-ready">—</div>
     <div class="stat-hint" id="d-ready-hint">共 6 个数据集</div>
+  </div>
+</div>
+
+<div class="card mb-16">
+  <div class="card-head">
+    <h2 class="card-title">覆盖矩阵</h2>
+    <span class="card-sub">年份 × 标的；格内数字为该年有行情的交易日数，越绿越全</span>
+    <div class="spacer"></div>
+    <div class="row">
+      <select id="cover-sort" onchange="DataPage.renderCoverage()" title="排序方式">
+        <option value="default">按覆盖天数降序</option>
+        <option value="code">按代码</option>
+        <option value="gap">按缺口数降序</option>
+      </select>
+      <input type="text" id="cover-search" placeholder="只看某只标的" oninput="DataPage.renderCoverage()">
+    </div>
+  </div>
+  <div class="card-body tight">
+    <div class="table-wrap" style="max-height:420px" id="cover-wrap">
+      <table id="cover-table">
+        <thead><tr><th>标的</th></tr></thead>
+        <tbody id="cover-body">
+          <tr><td class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-16">
+  <div class="card-head">
+    <h2 class="card-title">数据质量</h2>
+    <span class="card-sub" id="q-date">—</span>
+    <div class="spacer"></div>
+    <a class="btn btn-sm" id="q-export" href="/api/data/quality/export" download>导出校验报告</a>
+  </div>
+  <div class="card-body" id="quality-panel">
+    <div class="faint small">加载中…</div>
+  </div>
+</div>
+
+<div class="grid grid-2 mb-16">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">单个标的补拉</h2>
+      <span class="card-sub">只补这一只的行情与复权因子</span>
+    </div>
+    <div class="card-body">
+      <div class="toolbar">
+        <div class="field" style="min-width:180px">
+          <label for="fill-code">标的代码</label>
+          <input type="text" id="fill-code" placeholder="如 sh.600000">
+        </div>
+        <div class="field">
+          <label for="fill-start">起始日</label>
+          <input type="date" id="fill-start">
+        </div>
+        <button class="btn" onclick="DataPage.fillOne()" id="btn-fill">补拉</button>
+      </div>
+      <p class="faint small mt-8" id="fill-hint">
+        会在后台创建 update 任务；代码需与标的表一致（sh./sz. 前缀）。
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">交易日历</h2>
+      <span class="card-sub" id="cal-range">—</span>
+    </div>
+    <div class="card-body" id="calendar-panel">
+      <div class="faint small">加载中…</div>
+    </div>
   </div>
 </div>
 

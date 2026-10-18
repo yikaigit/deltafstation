@@ -24,7 +24,7 @@ ID_IN_JS = re.compile(r"""(?:getElementById|el)\(\s*['"]([\w-]+)['"]\s*\)""")
 ID_IN_HTML = re.compile(r"""id=["']([\w-]+)["']""")
 
 # 由 JS 动态插入到 DOM 的节点，模板里不存在属正常
-DYNAMIC_IDS = {"drawer-chart"}
+DYNAMIC_IDS = {"drawer-chart", "drawer-radar", "drawer-kline"}
 
 
 def ids_of_html(names: list[str]) -> set[str]:

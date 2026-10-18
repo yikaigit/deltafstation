@@ -46,6 +46,7 @@ DEFAULTS: Dict[str, Any] = {
         "neutralize": "industry",
         "winsor_mad": 5.0,
         "min_industry_samples": 5,
+        "snapshot_days": 1250,
     },
     "backtest": {
         "initial_cash": 1_000_000,

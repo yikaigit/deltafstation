@@ -30,13 +30,83 @@
     <div class="stat-hint" id="stat-version-hint">技术四维</div>
   </div>
   <div class="card stat">
-    <div class="stat-label">最新打分日期</div>
-    <div class="stat-value" id="stat-score-date">—</div>
-    <div class="stat-hint" id="stat-score-hint">每日收盘后生成</div>
+    <div class="stat-label">数据质量</div>
+    <div class="stat-value" id="stat-quality">—</div>
+    <div class="stat-hint" id="stat-quality-hint">最近一次校验</div>
+  </div>
+</div>
+
+<div class="card mb-16">
+  <div class="card-head">
+    <h2 class="card-title">快捷入口</h2>
+    <span class="card-sub">常用操作一键直达</span>
+  </div>
+  <div class="card-body">
+    <div class="row">
+      <button class="btn" onclick="Index.quickUpdate()" id="quick-update">触发数据更新</button>
+      <a class="btn" href="/scores">查看每日打分</a>
+      <a class="btn" href="/backtest">运行回测</a>
+      <a class="btn" href="/data">数据管理</a>
+      <span class="faint small" id="quick-hint">更新任务在数据管理页可见进度</span>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-2 mb-16">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">Top 10</h2>
+      <span class="card-sub" id="top-date">—</span>
+      <div class="spacer"></div>
+      <a class="small" href="/scores">全部榜单</a>
+    </div>
+    <div class="card-body tight">
+      <div class="table-wrap" style="max-height:380px">
+        <table>
+          <thead>
+            <tr><th class="right" style="width:42px">#</th><th>代码</th><th>名称</th>
+              <th class="right">综合分</th><th>评级</th></tr>
+          </thead>
+          <tbody id="top-body">
+            <tr><td colspan="5" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">Bottom 10</h2>
+      <span class="card-sub" id="bottom-date">—</span>
+    </div>
+    <div class="card-body tight">
+      <div class="table-wrap" style="max-height:380px">
+        <table>
+          <thead>
+            <tr><th class="right" style="width:42px">#</th><th>代码</th><th>名称</th>
+              <th class="right">综合分</th><th>评级</th></tr>
+          </thead>
+          <tbody id="bottom-body">
+            <tr><td colspan="5" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
 <div class="grid grid-2-1 mb-16">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">行业平均分</h2>
+      <span class="card-sub">横截面百分位均值，红高绿低</span>
+    </div>
+    <div class="card-body" id="industry-heat">
+      <div class="faint small">加载中…</div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-head">
       <h2 class="card-title">评级分布</h2>
@@ -44,6 +114,31 @@
     </div>
     <div class="card-body">
       <div id="chart-grade" class="chart"></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-2-1 mb-16">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">最近任务</h2>
+      <span class="card-sub">每日 18:00 自动更新</span>
+      <div class="spacer"></div>
+      <a class="small" href="/data">前往数据管理</a>
+    </div>
+    <div class="card-body tight">
+      <div class="table-wrap" style="max-height:320px">
+        <table>
+          <thead>
+            <tr>
+              <th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>创建时间</th><th>完成时间</th>
+            </tr>
+          </thead>
+          <tbody id="job-body">
+            <tr><td colspan="6" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -54,29 +149,6 @@
     </div>
     <div class="card-body" id="dataset-list">
       <div class="faint small">加载中…</div>
-    </div>
-  </div>
-</div>
-
-<div class="card">
-  <div class="card-head">
-    <h2 class="card-title">最近任务</h2>
-    <span class="card-sub">每日 18:00 自动更新</span>
-    <div class="spacer"></div>
-    <a class="small" href="/data">前往数据管理</a>
-  </div>
-  <div class="card-body tight">
-    <div class="table-wrap" style="max-height:320px">
-      <table>
-        <thead>
-          <tr>
-            <th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>创建时间</th><th>完成时间</th>
-          </tr>
-        </thead>
-        <tbody id="job-body">
-          <tr><td colspan="6" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
-        </tbody>
-      </table>
     </div>
   </div>
 </div>

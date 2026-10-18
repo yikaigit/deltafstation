@@ -196,6 +196,57 @@ const ScorePage = (() => {
     renderTable();
   }
 
+  const DIMS = [
+    ['trend', '趋势'],
+    ['momentum', '动量'],
+    ['volume', '量能'],
+    ['risk', '风险'],
+    ['valuation', '估值'],
+    ['quality', '质量'],
+  ];
+
+  function dimRows(latest) {
+    return DIMS.filter(
+      ([key]) => latest['dim_' + key] !== undefined && latest['dim_' + key] !== null
+    )
+      .map(([key, label]) => {
+        const value = Math.max(0, Math.min(100, Number(latest['dim_' + key]) || 0));
+        return `<div class="dim-row">
+          <span class="dim-label">${label}</span>
+          <span class="dim-track"><i style="width:${value}%"></i></span>
+          <span class="dim-value mono">${value.toFixed(1)}</span>
+        </div>`;
+      })
+      .join('');
+  }
+
+  function indicatorRows(ind) {
+    const val = ind.valuation || {};
+    const fund = ind.fundamental || {};
+    const atr = ind.atr || {};
+    const rows = [
+      ['PE(TTM)', val.pe_ttm != null ? Number(val.pe_ttm).toFixed(2) : '—', '估值'],
+      ['PB(MRQ)', val.pb_mrq != null ? Number(val.pb_mrq).toFixed(2) : '—', '估值'],
+      ['PS(TTM)', val.ps_ttm != null ? Number(val.ps_ttm).toFixed(2) : '—', '估值'],
+      ['总市值', val.total_mv != null ? (Number(val.total_mv) / 1e8).toFixed(1) + ' 亿' : '—', '估值'],
+      ['ROE(加权)', fund.roe_wa != null ? Number(fund.roe_wa).toFixed(2) + '%' : '—', fund.report_date || '财务'],
+      ['营收同比', fund.rev_yoy != null ? Number(fund.rev_yoy).toFixed(2) + '%' : '—', fund.report_date || '财务'],
+      ['净利同比', fund.profit_yoy != null ? Number(fund.profit_yoy).toFixed(2) + '%' : '—', fund.report_date || '财务'],
+      ['毛利率', fund.gross_margin != null ? Number(fund.gross_margin).toFixed(2) + '%' : '—', fund.report_date || '财务'],
+      ['股息率', fund.div_yield != null ? Number(fund.div_yield).toFixed(2) + '%' : '—', fund.report_date || '财务'],
+      ['ATR%', atr.atr_pct != null ? Number(atr.atr_pct).toFixed(2) + '%' : '—', '近 20 日均真实波幅'],
+    ];
+    return rows
+      .map(
+        ([label, value, hint]) => `<div class="metric">
+          <span class="metric-label">${App.esc(label)}</span>
+          <span class="metric-value" style="font-size:16px">${App.esc(value)}</span>
+          <span class="metric-hint">${App.esc(hint)}</span>
+        </div>`
+      )
+      .join('');
+  }
+
   async function openDetail(code) {
     App.openDrawer(code, '<div class="faint small">加载中…</div>');
     try {
@@ -203,27 +254,9 @@ const ScorePage = (() => {
       const data = await App.get('/api/scores/' + encodeURIComponent(code), query);
       const latest = data.latest || {};
       const meta = data.meta || {};
+      const ind = data.indicators || {};
       const title = `${code} ${meta.name || ''}`.trim();
       document.getElementById('drawer-title').textContent = title;
-
-      const dims = [
-        ['trend', '趋势'],
-        ['momentum', '动量'],
-        ['volume', '量能'],
-        ['risk', '风险'],
-        ['valuation', '估值'],
-        ['quality', '质量'],
-      ]
-        .filter(([key]) => latest['dim_' + key] !== undefined && latest['dim_' + key] !== null)
-        .map(([key, label]) => {
-          const value = Math.max(0, Math.min(100, Number(latest['dim_' + key]) || 0));
-          return `<div class="dim-row">
-            <span class="dim-label">${label}</span>
-            <span class="dim-track"><i style="width:${value}%"></i></span>
-            <span class="dim-value mono">${value.toFixed(1)}</span>
-          </div>`;
-        })
-        .join('');
 
       document.getElementById('drawer-body').innerHTML = `
         <div class="drawer-summary">
@@ -244,8 +277,14 @@ const ScorePage = (() => {
             <div class="stat-value" style="font-size:16px">${App.shortDate(latest.trade_date)}</div>
           </div>
         </div>
+        <h3 class="drawer-h3">六维雷达</h3>
+        <div id="drawer-radar" class="chart radar"></div>
         <h3 class="drawer-h3">维度得分</h3>
-        <div class="dim-list">${dims || '<div class="faint small">该版本仅输出综合分</div>'}</div>
+        <div class="dim-list">${dimRows(latest) || '<div class="faint small">该版本仅输出综合分</div>'}</div>
+        <h3 class="drawer-h3">关键指标</h3>
+        <div class="grid grid-3" style="gap:10px">${indicatorRows(ind)}</div>
+        <h3 class="drawer-h3">K线（近 120 个交易日，前复权）</h3>
+        <div id="drawer-kline" class="chart"></div>
         <h3 class="drawer-h3">评分历史（近 250 个交易日）</h3>
         <div id="drawer-chart" class="chart sm"></div>
         <h3 class="drawer-h3">基础信息</h3>
@@ -258,10 +297,138 @@ const ScorePage = (() => {
           <tr><th>版本</th><td class="mono">${App.esc(data.version || '—')}</td></tr>
         </table>`;
 
+      drawRadar(latest);
+      drawKline(data.kline || []);
       drawHistory(data.history || []);
     } catch (err) {
       document.getElementById('drawer-body').innerHTML = App.empty('加载失败', err.message);
     }
+  }
+
+  function drawRadar(latest) {
+    const node = document.getElementById('drawer-radar');
+    if (!node || typeof echarts === 'undefined') return;
+    const present = DIMS.filter(
+      ([key]) => latest['dim_' + key] !== undefined && latest['dim_' + key] !== null
+    );
+    if (!present.length) {
+      node.innerHTML = '<div class="faint small" style="padding:16px">该版本未输出维度得分</div>';
+      return;
+    }
+    const colors = App.chartColors();
+    const chart = echarts.init(node);
+    chart.setOption({
+      tooltip: {},
+      radar: {
+        center: ['50%', '52%'],
+        radius: '66%',
+        indicator: present.map(([, label]) => ({ name: label, max: 100 })),
+        axisName: { color: colors.text, fontSize: 11 },
+        splitLine: { lineStyle: { color: colors.split } },
+        splitArea: { areaStyle: { color: ['#ffffff', '#fafbfc'] } },
+        axisLine: { lineStyle: { color: colors.split } },
+      },
+      series: [
+        {
+          type: 'radar',
+          data: [
+            {
+              value: present.map(([key]) => Math.max(0, Math.min(100, Number(latest['dim_' + key]) || 0))),
+              name: '维度得分',
+              areaStyle: { color: 'rgba(24,95,165,0.18)' },
+              lineStyle: { color: colors.primary, width: 1.6 },
+              itemStyle: { color: colors.primary },
+            },
+          ],
+        },
+      ],
+    });
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  function drawKline(bars) {
+    const node = document.getElementById('drawer-kline');
+    if (!node || typeof echarts === 'undefined') return;
+    if (!bars.length) {
+      node.innerHTML = '<div class="faint small" style="padding:16px">暂无行情数据</div>';
+      return;
+    }
+    const colors = App.chartColors();
+    // 红涨绿跌
+    const upColor = '#d64545';
+    const downColor = '#2e9e6b';
+    const chart = echarts.init(node);
+    chart.setOption({
+      grid: [
+        { left: 48, right: 12, top: 16, height: 150 },
+        { left: 48, right: 12, top: 180, height: 46 },
+      ],
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross' },
+        valueFormatter: (v) => (v == null ? '—' : Number(v).toFixed(2)),
+      },
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      xAxis: [
+        {
+          type: 'category',
+          data: bars.map((b) => b.date),
+          boundaryGap: true,
+          axisLine: { lineStyle: { color: colors.split } },
+          axisLabel: { show: false },
+          axisTick: { show: false },
+        },
+        {
+          type: 'category',
+          gridIndex: 1,
+          data: bars.map((b) => b.date),
+          boundaryGap: true,
+          axisLine: { lineStyle: { color: colors.split } },
+          axisLabel: { color: colors.text, fontSize: 10 },
+          axisTick: { show: false },
+        },
+      ],
+      yAxis: [
+        {
+          scale: true,
+          splitLine: { lineStyle: { color: colors.split } },
+          axisLabel: { color: colors.text, fontSize: 11 },
+        },
+        {
+          gridIndex: 1,
+          splitNumber: 2,
+          splitLine: { show: false },
+          axisLabel: { show: false },
+          axisLine: { show: false },
+          axisTick: { show: false },
+        },
+      ],
+      dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 }],
+      series: [
+        {
+          name: 'K线',
+          type: 'candlestick',
+          data: bars.map((b) => [b.open, b.close, b.low, b.high]),
+          itemStyle: {
+            color: upColor,
+            color0: downColor,
+            borderColor: upColor,
+            borderColor0: downColor,
+          },
+        },
+        {
+          name: '成交量',
+          type: 'bar',
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          data: bars.map((b) => ({
+            value: b.volume,
+            itemStyle: { color: b.close >= b.open ? 'rgba(214,69,69,0.5)' : 'rgba(46,158,107,0.5)' },
+          })),
+        },
+      ],
+    });
+    window.addEventListener('resize', () => chart.resize());
   }
 
   function drawHistory(history) {

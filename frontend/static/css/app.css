@@ -141,6 +141,8 @@ input[type="text"], input[type="date"], select {
   font-family: inherit;
 }
 input:focus, select:focus { outline: 2px solid var(--primary-weak); border-color: var(--primary); }
+.check { display: inline-flex; align-items: center; gap: 7px; height: 32px; font-size: 13px; cursor: pointer; }
+.check input { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; margin: 0; }
 .toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 
 /* ---------- 表格 ---------- */
@@ -205,6 +207,8 @@ tbody tr.clickable:hover { cursor: pointer; }
 /* ---------- 图表 ---------- */
 .chart { width: 100%; height: 260px; }
 .chart.sm { height: 200px; }
+.chart.tall { height: 340px; }
+.chart.radar { height: 300px; }
 
 /* ---------- 抽屉 ---------- */
 .drawer-mask {
@@ -288,6 +292,41 @@ table.kv tr:last-child th, table.kv tr:last-child td { border-bottom: 0; }
 .up { color: var(--up); }
 .down { color: var(--down); }
 .btn.btn-sm { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
+
+/* ---------- 内嵌卡片（详情区块的子卡） ---------- */
+.card.sub { box-shadow: none; background: var(--surface-2); }
+.card.sub .card-head { padding: 12px 16px; }
+.card.sub .card-body { background: var(--surface); }
+
+/* ---------- 指标卡 ---------- */
+.metric { display: flex; flex-direction: column; gap: 2px; }
+.metric-label { font-size: 12px; color: var(--muted); }
+.metric-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.metric-hint { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* ---------- 参数网格热力图 ---------- */
+.heat-grid { display: flex; gap: 20px; flex-wrap: wrap; }
+.heat-block { min-width: 260px; }
+.heat-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+table.heat { border-collapse: separate; border-spacing: 3px; font-size: 12px; }
+table.heat th { background: none; border: 0; padding: 4px 6px; color: var(--muted); font-weight: 500; }
+table.heat td { text-align: center; padding: 7px 4px; border-radius: 6px; min-width: 62px; font-variant-numeric: tabular-nums; }
+table.heat td.best { outline: 2px solid var(--primary); outline-offset: -2px; font-weight: 600; }
+.heat-scale { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--faint); }
+.heat-bar { height: 8px; flex: 1; max-width: 220px; border-radius: 4px; }
+
+/* ---------- 覆盖矩阵 ---------- */
+table.cover td { text-align: center; padding: 5px; font-size: 12px; border-radius: 4px; }
+
+/* ---------- 行业热力条 ---------- */
+.heat-row { display: grid; grid-template-columns: 96px 1fr 56px; align-items: center; gap: 10px; padding: 5px 0; }
+.heat-track { height: 16px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.heat-track > i { display: block; height: 100%; border-radius: 4px; }
+
+/* ---------- 对比勾选列 ---------- */
+td.pick, th.pick { text-align: center; }
+.nowrap { white-space: nowrap; }
+table#cover-table td { border-bottom: 1px solid #fff; }
 
 @media (max-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }

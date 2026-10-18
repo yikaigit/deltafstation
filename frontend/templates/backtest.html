@@ -54,23 +54,46 @@
             <input type="number" id="bt-cash" name="initial_cash" value="1000000" min="10000" step="10000">
           </div>
           <div class="field">
-            <label for="bt-bench">基准</label>
-            <select id="bt-bench" name="benchmark">
-              <option value="sh.000300">沪深300 价格指数</option>
-              <option value="sh.000300_tr">沪深300 全收益（待接入）</option>
+            <label for="bt-wmethod">权重方式</label>
+            <select id="bt-wmethod" name="weight_method">
+              <option value="equal">等权</option>
+              <option value="score">按打分占比</option>
             </select>
           </div>
           <div class="field">
-            <label for="bt-mode">样本切分</label>
-            <select id="bt-mode" name="split">
-              <option value="is_oos">IS 70% / OOS 30%</option>
-              <option value="full">全样本</option>
-            </select>
+            <label for="bt-isratio">IS / OOS 切分</label>
+            <input type="number" id="bt-isratio" name="is_ratio" value="0.7" min="0.1" max="0.9" step="0.05"
+                   title="前 70% 为样本内（IS），后 30% 为样本外（OOS）">
+          </div>
+        </div>
+        <div class="grid grid-3" style="gap:12px">
+          <div class="field">
+            <label for="bt-minpct">最低分位门槛</label>
+            <input type="number" id="bt-minpct" name="min_score_pct" value="0" min="0" max="100" step="1"
+                   title="0 表示不筛选；填 50 则表示只买分位前 50% 的标的">
+          </div>
+          <div class="field">
+            <label>股票剔除</label>
+            <label class="check" for="bt-exclude-st">
+              <input type="checkbox" id="bt-exclude-st" name="exclude_st" checked>
+              <span>剔除 ST</span>
+            </label>
+          </div>
+          <div class="field">
+            <label>大盘择时</label>
+            <label class="check" for="bt-regime">
+              <input type="checkbox" id="bt-regime" name="regime" checked>
+              <span>MA50/MA200 定敞口</span>
+            </label>
           </div>
         </div>
         <div class="row mt-16">
           <button class="btn btn-primary" type="submit" id="bt-run">运行回测</button>
-          <span class="faint small" id="bt-hint">回测引擎在 P3 阶段接入，当前提交会返回未实现提示</span>
+          <label class="check" for="bt-grid" title="32 组 top_n × 调仓间隔 × 择时 组合，跑完要更久">
+            <input type="checkbox" id="bt-grid" name="grid" checked>
+            <span>附带参数网格（32 组）</span>
+          </label>
+          <span class="faint small" id="bt-hint">已接入：T 日收盘出信号、T+1 开盘成交</span>
         </div>
       </form>
     </div>
@@ -90,8 +113,103 @@
         <tr><th>印花税</th><td>万 5（卖出）</td></tr>
         <tr><th>滑点</th><td>万 5</td></tr>
         <tr><th>最小单位</th><td>100 股</td></tr>
+        <tr><th>基准</th><td>沪深 300（sh.000300）</td></tr>
+        <tr><th>复权口径</th><td>后复权价记账，股数按不复权价下单</td></tr>
       </table>
     </div>
+  </div>
+</div>
+
+<div class="card" id="bt-detail" hidden>
+  <div class="card-head">
+    <h2 class="card-title">回测详情</h2>
+    <span class="card-sub" id="bt-detail-id">—</span>
+    <div class="spacer"></div>
+    <button class="btn btn-sm" onclick="BacktestPage.closeDetail()">收起</button>
+  </div>
+  <div class="card-body">
+    <div id="bt-detail-params" class="chips mb-16"></div>
+    <div id="bt-detail-warn" class="mb-16" hidden></div>
+    <div class="grid grid-4 mb-16" id="bt-metrics"></div>
+
+    <div class="card sub mb-16">
+      <div class="card-head"><h3 class="card-title">净值曲线（策略 vs 沪深300）</h3></div>
+      <div class="card-body tight"><div id="chart-nav" class="chart tall"></div></div>
+    </div>
+
+    <div class="grid grid-2 mb-16">
+      <div class="card sub">
+        <div class="card-head"><h3 class="card-title">年度收益</h3></div>
+        <div class="card-body tight"><div id="chart-year" class="chart sm"></div></div>
+      </div>
+      <div class="card sub">
+        <div class="card-head"><h3 class="card-title">IS / OOS 对比</h3></div>
+        <div class="card-body tight">
+          <table>
+            <thead><tr><th>指标</th><th class="right">全区间</th><th class="right">IS</th><th class="right">OOS</th></tr></thead>
+            <tbody id="bt-isoos-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card sub mb-16">
+      <div class="card-head">
+        <h3 class="card-title">参数网格热力图</h3>
+        <span class="card-sub">颜色 = OOS 夏普；括号内为 IS 夏普，实线框为 IS 最优</span>
+      </div>
+      <div class="card-body" id="bt-grid-heat"></div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card sub">
+        <div class="card-head">
+          <h3 class="card-title">持仓历史</h3>
+          <span class="card-sub" id="bt-holdings-sub">—</span>
+        </div>
+        <div class="card-body tight">
+          <div class="table-wrap" style="max-height:420px">
+            <table>
+              <thead><tr><th>调仓日</th><th class="right">持仓数</th><th>重仓（权重）</th></tr></thead>
+              <tbody id="bt-holdings-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="card sub">
+        <div class="card-head">
+          <h3 class="card-title">交易明细</h3>
+          <span class="card-sub" id="bt-trades-sub">—</span>
+        </div>
+        <div class="card-body tight">
+          <div class="table-wrap" style="max-height:420px">
+            <table>
+              <thead><tr><th>日期</th><th>代码</th><th>方向</th><th class="right">价格</th><th class="right">股数</th><th class="right">金额</th></tr></thead>
+              <tbody id="bt-trades-body"></tbody>
+            </table>
+          </div>
+          <div class="row mt-8" id="bt-trades-more" hidden>
+            <button class="btn btn-sm" onclick="BacktestPage.moreTrades()">显示更多交易</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" id="bt-compare" hidden>
+  <div class="card-head">
+    <h2 class="card-title">回测对比</h2>
+    <span class="card-sub" id="bt-compare-sub">—</span>
+    <div class="spacer"></div>
+    <button class="btn btn-sm" onclick="BacktestPage.closeCompare()">收起</button>
+  </div>
+  <div class="card-body">
+    <div id="chart-compare" class="chart tall mb-16"></div>
+    <table>
+      <thead><tr><th>指标</th><th class="right" id="bt-cmp-a">—</th><th class="right" id="bt-cmp-b">—</th></tr></thead>
+      <tbody id="bt-compare-body"></tbody>
+    </table>
   </div>
 </div>
 
@@ -99,12 +217,18 @@
   <div class="card-head">
     <h2 class="card-title">回测记录</h2>
     <span class="card-sub" id="bt-count">—</span>
+    <div class="spacer"></div>
+    <div class="row" id="bt-compare-bar" hidden>
+      <span class="faint small" id="bt-compare-hint">勾选 2 条记录</span>
+      <button class="btn btn-sm" id="bt-compare-btn" disabled onclick="BacktestPage.compareSelected()">对比所选</button>
+    </div>
   </div>
   <div class="card-body tight">
     <div class="table-wrap" style="max-height:520px">
       <table>
         <thead>
           <tr>
+            <th style="width:38px"><input type="checkbox" id="bt-check-all" title="全选/清空对比" onchange="BacktestPage.toggleAll(this)"></th>
             <th>回测 ID</th><th>区间</th><th class="right">持仓</th>
             <th class="right">总收益</th><th class="right">年化</th>
             <th class="right">夏普</th><th class="right">最大回撤</th>
@@ -112,7 +236,7 @@
           </tr>
         </thead>
         <tbody id="bt-body">
-          <tr><td colspan="9" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+          <tr><td colspan="10" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
         </tbody>
       </table>
     </div>

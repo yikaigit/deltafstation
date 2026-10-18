@@ -170,3 +170,55 @@ class TestSQL:
         )
         assert len(out) == 2
         assert int(out["n"].sum()) == len(bars_df)
+
+
+class TestReadFilters:
+    """``read(filters=...)``：把行级过滤下推到 Parquet。
+
+    这是 P4 加的能力：个股抽屉每次只关心一只票，整表拉进 pandas 再切片
+    在 20 万行的复权因子上要 0.7s，下推后 0.05s。
+    """
+
+    def test_equality(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", columns=["code"], filters=[("code", "=", "sh.600000")])
+        assert len(out) == 4
+        assert set(out["code"]) == {"sh.600000"}
+
+    def test_in_operator(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", filters=[("code", "in", ["sz.000001"])])
+        assert len(out) == 2
+
+    def test_combined_with_date_range(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read(
+            "bars",
+            filters=[("code", "=", "sh.600000")],
+            start="2024-01-01",
+            end="2024-01-02",
+        )
+        assert len(out) == 1
+        assert out["date"].iloc[0] == pd.Timestamp("2024-01-02")
+
+    def test_multiple_conditions(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read(
+            "bars",
+            filters=[("code", "=", "sh.600000"), ("close", ">=", 10.3)],
+        )
+        # 样本里 sh.600000 的收盘价是 10.2 / 10.4 / 10.1 / 10.3 → 两条满足 ≥10.3
+        assert len(out) == 2
+        assert sorted(out["close"].tolist()) == [pytest.approx(10.3), pytest.approx(10.4)]
+
+    def test_no_match_returns_empty(self, lake, bars_df):
+        lake.write("bars", bars_df)
+        out = lake.read("bars", filters=[("code", "=", "sh.999999")])
+        assert out.empty
+
+    def test_unknown_operator_raises(self, lake, bars_df):
+        from backend.core.lake import LakeError
+
+        lake.write("bars", bars_df)
+        with pytest.raises(LakeError):
+            lake.read("bars", filters=[("code", "~", "sh.600000")])

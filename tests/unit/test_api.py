@@ -256,24 +256,75 @@ class TestScoreAPI:
         )
         res = client.get("/api/scores/sh.999999")
         assert res.status_code == 404
-        assert body(res)["error"]["code"] == "not_found"
+        # read_tail 按 code 过滤后整表为空 → no_score；有数据但缺该 code 才是 not_found
+        assert body(res)["error"]["code"] == "no_score"
+
+
+class FakeRunner:
+    """测试用执行器：只记录提交，不真正跑（避免打网络、避免后台线程）。"""
+
+    def __init__(self):
+        self.submitted = []
+        self.cancelled = []
+
+    def submit(self, kind, params=None):
+        from backend.core.meta_db import get_meta_db
+
+        job_id = get_meta_db().create_job(kind=kind, params=params or {})
+        self.submitted.append({"job_id": job_id, "kind": kind, "params": params or {}})
+        return job_id
+
+    def cancel(self, job_id):
+        self.cancelled.append(job_id)
+        return True
+
+
+@pytest.fixture()
+def runner(client, monkeypatch):
+    """替换 job_api 里的执行器，让 POST /api/jobs 只落库不执行。"""
+    import backend.api.job_api as job_api
+
+    fake = FakeRunner()
+    monkeypatch.setattr(job_api, "get_runner", lambda: fake)
+    return fake
 
 
 class TestJobAPI:
     def test_list_empty(self, client):
         assert body(client.get("/api/jobs"))["data"]["items"] == []
 
-    def test_create_update_job(self, client):
-        res = client.post("/api/jobs", json={"kind": "update", "params": {"scope": "hs300"}})
+    def test_create_update_job(self, client, runner):
+        res = client.post("/api/jobs", json={"kind": "update", "params": {"trade_date": "2026-10-16"}})
         assert res.status_code == 201
         data = body(res)["data"]
         assert data["status"] == "pending"
         assert data["kind"] == "update"
         assert data["job_id"]
 
+        assert len(runner.submitted) == 1
+        assert runner.submitted[0]["kind"] == "update"
+        assert runner.submitted[0]["params"] == {"trade_date": "2026-10-16"}
+
         listed = body(client.get("/api/jobs"))["data"]["items"]
         assert len(listed) == 1
         assert listed[0]["id"] == data["job_id"]
+
+    def test_unknown_params_are_filtered(self, client, runner):
+        client.post(
+            "/api/jobs",
+            json={"kind": "update", "params": {"trade_date": "2026-10-16", "evil": "x"}},
+        )
+        assert runner.submitted[0]["params"] == {"trade_date": "2026-10-16"}
+
+    def test_backfill_params_accepted(self, client, runner):
+        client.post(
+            "/api/jobs",
+            json={
+                "kind": "backfill",
+                "params": {"start": "2008-01-01", "valuation_years": 5, "with_fundamental": True},
+            },
+        )
+        assert runner.submitted[0]["params"]["valuation_years"] == 5
 
     def test_invalid_kind_rejected(self, client):
         res = client.post("/api/jobs", json={"kind": "hack"})
@@ -284,28 +335,65 @@ class TestJobAPI:
         res = client.post("/api/jobs", json={})
         assert res.status_code == 400
 
-    def test_get_detail(self, client):
-        job_id = body(client.post("/api/jobs", json={"kind": "score"}))["data"]["job_id"]
+    def test_invalid_params_type_rejected(self, client):
+        res = client.post("/api/jobs", json={"kind": "update", "params": "not-a-dict"})
+        assert res.status_code == 400
+        assert body(res)["error"]["code"] == "invalid_params"
+
+    @pytest.mark.parametrize("kind", ["evaluate"])
+    def test_unimplemented_kinds(self, client, kind):
+        """score 自 P2 起已实现（backend/core/scorer.py），只有 evaluate 还是 501。"""
+        res = client.post("/api/jobs", json={"kind": kind})
+        assert res.status_code == 501
+        assert body(res)["error"]["code"] == "not_implemented"
+
+    def test_get_detail(self, client, runner):
+        job_id = body(client.post("/api/jobs", json={"kind": "update"}))["data"]["job_id"]
         data = body(client.get(f"/api/jobs/{job_id}"))["data"]
         assert data["id"] == job_id
-        assert data["kind"] == "score"
+        assert data["kind"] == "update"
 
     def test_get_missing_404(self, client):
         assert client.get("/api/jobs/nope").status_code == 404
 
-    def test_cancel_pending(self, client):
+    def test_cancel_pending(self, client, runner):
         job_id = body(client.post("/api/jobs", json={"kind": "update"}))["data"]["job_id"]
         data = body(client.post(f"/api/jobs/{job_id}/cancel"))["data"]
-        assert data["status"] == "cancelled"
+        assert data["status"] == "cancelling"
+        assert runner.cancelled == [job_id]
 
-    def test_cancel_running_conflicts(self, client):
+    def test_cancel_running_signals(self, client, runner):
         from backend.core.meta_db import get_meta_db
 
         job_id = body(client.post("/api/jobs", json={"kind": "update"}))["data"]["job_id"]
         get_meta_db().update_job(job_id, status="running")
         res = client.post(f"/api/jobs/{job_id}/cancel")
+        assert res.status_code == 200
+        assert body(res)["data"]["status"] == "cancelling"
+
+    def test_cancel_finished_conflicts(self, client, runner):
+        from backend.core.meta_db import get_meta_db
+
+        job_id = body(client.post("/api/jobs", json={"kind": "update"}))["data"]["job_id"]
+        get_meta_db().update_job(job_id, status="success")
+        res = client.post(f"/api/jobs/{job_id}/cancel")
         assert res.status_code == 409
         assert body(res)["error"]["code"] == "invalid_status"
+
+    def test_cancel_orphan_marks_cancelled(self, client, monkeypatch):
+        """执行器里没有该任务（如进程重启过）时，直接标记 cancelled。"""
+        import backend.api.job_api as job_api
+        from backend.core.meta_db import get_meta_db
+
+        class OrphanRunner(FakeRunner):
+            def cancel(self, job_id):
+                return False
+
+        monkeypatch.setattr(job_api, "get_runner", lambda: OrphanRunner())
+        job_id = get_meta_db().create_job(kind="update")
+        data = body(client.post(f"/api/jobs/{job_id}/cancel"))["data"]
+        assert data["status"] == "cancelled"
+        assert get_meta_db().get_job(job_id)["status"] == "cancelled"
 
 
 class TestBacktestAPI:
@@ -314,10 +402,62 @@ class TestBacktestAPI:
         assert data["items"] == []
         assert data["count"] == 0
 
-    def test_post_not_implemented(self, client):
+    def test_post_without_data_fails_cleanly(self, client):
+        """引擎已接入：没数据时是 400 + 明确原因，不再是 501 骨架。"""
         res = client.post("/api/backtests", json={"top_n": 20})
-        assert res.status_code == 501
-        assert body(res)["error"]["code"] == "not_implemented"
+        assert res.status_code == 400
+        error = body(res)["error"]
+        assert error["code"] == "backtest_failed"
+        assert error["message"]
+
+    def test_post_bad_payload_is_not_500(self, client):
+        """version 写错 → 400；payload 不是 JSON → 走空 dict → 同样 400。"""
+        res = client.post("/api/backtests", json={"version": "v9.9.9"})
+        assert res.status_code == 400
+        assert body(res)["error"]["code"] == "backtest_failed"
+
+    def test_post_runs_engine_end_to_end(self, client):
+        """灌一份最小数据 → POST 真的跑完并落盘 + 记 experiments。"""
+        import numpy as np
+
+        from backend.core.config import get_config
+        from backend.core.lake import Lake
+        from backend.core.snapshots import ScoreStore
+
+        cfg = get_config()
+        lake, store = Lake(cfg), ScoreStore(cfg)
+        dates = pd.bdate_range("2023-01-02", periods=60)
+        rows = []
+        for code in ("sh.600001", "sh.600002"):
+            price = 10.0
+            for day in dates:
+                price *= 1.001
+                rows.append({"date": day, "code": code, "open": price,
+                             "high": price * 1.01, "low": price * 0.99,
+                             "close": price, "volume": 1e6, "amount": price * 1e6,
+                             "turn": 0.01, "pct_chg": 0.0, "tradestatus": 1})
+        lake.write("bars", pd.DataFrame(rows))
+        for day in dates:
+            store.write(pd.DataFrame({
+                "code": ["sh.600001", "sh.600002"],
+                "score_pct": [80.0, 20.0],
+            }), "v1.0.0", day.strftime("%Y-%m-%d"))
+
+        res = client.post("/api/backtests", json={
+            "top_n": 2, "rebal_days": 10, "regime": False,
+            "max_weight": 0.6, "version": "v1.0.0", "grid": False,
+        })
+        assert res.status_code == 201, body(res)
+        data = body(res)["data"]
+        assert data["id"].startswith("bt_")
+        assert data["score_version"] == "v1.0.0"
+        assert data["metrics"]["full"]["days"] > 0
+        assert data["experiment_id"].startswith("exp_")
+
+        # 落盘后可被 GET/DELETE 读到
+        detail = body(client.get(f"/api/backtests/{data['id']}"))
+        assert detail["data"]["id"] == data["id"]
+        assert body(client.delete(f"/api/backtests/{data['id']}"))["data"]["deleted"] == data["id"]
 
     def test_detail_missing_404(self, client):
         assert client.get("/api/backtests/nope").status_code == 404

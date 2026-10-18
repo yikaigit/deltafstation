@@ -1,0 +1,55 @@
+# 打分版本 v1.1.0 —— 修复未上市股票被误判为「零风险」后重算
+#
+# 与 v1.0.0 的**因子清单、权重、公式完全相同**，唯一差别是
+# ``downside_vol`` 的缺失值口径：v1.0.0 用 ``ret.where(ret < 0, 0.0)`` 把
+# NaN 也改成 0.0，而未上市列的收益率恒为 NaN —— 于是它的下行方差恒为 0，
+# 被算成「零风险」。该因子 direction=-1，零风险经反向标准化后是最高分，
+# 导致 2021-10-18 这类快照日的 top-N 被尚未上市的股票霸占
+# （score_pct=99 / data_quality=0.15 / 只有 dim_risk 有值）。
+# v1.1.0 改用 ``clip(upper=0.0)``：缺数据就是缺数据，不是零风险。
+# 回归测试：tests/unit/test_indicators.py::TestDownsideVol
+#           tests/unit/test_factors.py::TestMissingDataIsNotZeroRisk
+#
+# v1.0.0 的快照保留在原处不动，便于对照；不要把两份数据混用。
+version: v1.1.0
+description: 技术四维打分（趋势/动量/量能/风险），不含估值与质量；downside_vol 缺失值不再计为零风险
+
+dimensions:
+  trend:
+    weight: 0.35
+    factors:
+      - ma_bias_20
+      - ma_bias_60
+      - ma_bias_120
+      - macd_hist_norm
+      - adx_dir
+      - slope_60
+  momentum:
+    weight: 0.28
+    factors:
+      - roc_20
+      - roc_60
+      - roc_120
+      - rs_60
+      - rsi_health
+  volume:
+    weight: 0.22
+    factors:
+      - vol_ratio
+      - obv_z
+      - mfi_14
+      - turn_rank
+  risk:
+    weight: 0.15
+    factors:
+      - atr_pct_rank
+      - hv_60
+      - downside_vol
+      - dd_1y
+
+grades:
+  - {min_pct: 90, label: 强烈看多, key: strong_buy}
+  - {min_pct: 70, label: 看多, key: buy}
+  - {min_pct: 30, label: 中性, key: neutral}
+  - {min_pct: 10, label: 看空, key: sell}
+  - {min_pct: 0, label: 强烈看空, key: strong_sell}

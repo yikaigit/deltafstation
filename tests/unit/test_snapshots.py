@@ -109,3 +109,40 @@ class TestExplicitDate:
         out = store.read(version="v1.0.0", trade_date="2026-10-16")
         assert len(out) == 2
         assert out["trade_date"].iloc[0] == pd.Timestamp("2026-10-16")
+
+
+class TestTailCache:
+    """``read_tail`` 的内存缓存。
+
+    按日一文件的设计让「读最近 N 天」变成「打开 N 个 parquet」，
+    固定开销 ~0.55s（与读多少列无关）。个股抽屉是高频交互，必须缓存。
+    """
+
+    def test_repeated_calls_are_fast_and_correct(self, store):
+        for day in ("2026-10-15", "2026-10-16"):
+            store.write(make_snapshot(day), version="v1.0.0")
+        first = store.read_tail("v1.0.0", days=10, codes=["sh.600000"])
+        second = store.read_tail("v1.0.0", days=10, codes=["sh.600000"])
+        assert len(first) == len(second) == 2
+        assert list(first["score_pct"]) == list(second["score_pct"])
+
+    def test_cache_does_not_leak_across_versions(self, store):
+        store.write(make_snapshot("2026-10-16"), version="v1.0.0")
+        store.write(make_snapshot("2026-10-16"), version="v2.0.0")
+        v1 = store.read_tail("v1.0.0", days=10)
+        v2 = store.read_tail("v2.0.0", days=10)
+        assert (v1["version"] == "v1.0.0").all()
+        assert (v2["version"] == "v2.0.0").all()
+
+    def test_write_invalidates_cache(self, store):
+        store.write(make_snapshot("2026-10-16"), version="v1.0.0")
+        assert len(store.read_tail("v1.0.0", days=10)) == 2
+        # 追加一天后必须能读到 —— 缓存若不作废，这里会拿到旧的 2 行
+        store.write(make_snapshot("2026-10-19"), version="v1.0.0")
+        assert len(store.read_tail("v1.0.0", days=10)) == 4
+
+    def test_codes_filter_applied(self, store):
+        store.write(make_snapshot("2026-10-16"), version="v1.0.0")
+        one = store.read_tail("v1.0.0", days=10, codes=["sh.600000"])
+        assert len(one) == 1
+        assert one["code"].iloc[0] == "sh.600000"

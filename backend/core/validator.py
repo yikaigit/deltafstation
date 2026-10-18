@@ -25,7 +25,8 @@ from typing import List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from .adjustment import AdjustmentStore, normalize_bs_code
+from .codes import normalize_bs_code
+from .codes import limit_pct as _limit_pct
 
 LEVEL_ERROR = "ERROR"
 LEVEL_WARN = "WARN"
@@ -33,22 +34,43 @@ LEVEL_WARN = "WARN"
 EXPECTED_COLUMNS = ["Date", "Open", "High", "Low", "Close", "Volume"]
 PRICE_COLUMNS = ["Open", "High", "Low", "Close"]
 
+#: 数据湖（小写列名）→ 校验器内部规范列名
+LAKE_TO_CANONICAL = {
+    "date": "Date",
+    "open": "Open",
+    "high": "High",
+    "low": "Low",
+    "close": "Close",
+    "volume": "Volume",
+    "amount": "Amount",
+    "turn": "Turn",
+    "preclose": "PreClose",
+}
+
 #: 硬阈值：任何板块任何时期超过此幅度的日涨跌幅一定是数据错误
 HARD_RETURN_LIMIT = 0.35
-#: 日历日间隔阈值（无交易日历时的近似判据）
-GAP_CALENDAR_DAYS = 5
+#: 日历日间隔阈值（**无交易日历时**的退化判据）。
+#: 取 12 天：春节/国庆休市加上前后周末，两个交易日的自然日间隔最长可达 11~12 天，
+#: 阈值给小了会把正常长假误报成漏拉。有日历时走 R2.8 的交易日判定路径。
+GAP_CALENDAR_DAYS = 12
 EPS = 1e-6
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """把数据湖的小写列名转成校验器规范列名（已规范则原样返回）。"""
+    if df is None:
+        return df
+    rename = {k: v for k, v in LAKE_TO_CANONICAL.items() if k in df.columns and v not in df.columns}
+    if not rename:
+        return df
+    return df.rename(columns=rename)
 
 
 def soft_return_limit(symbol: Optional[str]) -> float:
     """按板块返回软阈值（仅用于 WARN，历史规则变化可能误报）。"""
-    code = normalize_bs_code(symbol or "")
-    head = code.split(".")[-1]
-    if head.startswith("30") or head.startswith("688"):
-        return 0.20      # 创业板 / 科创板
-    if head.startswith(("4", "8")):
-        return 0.30      # 北交所
-    return 0.10          # 主板
+    if not symbol:
+        return 0.10
+    return _limit_pct(symbol)
 
 
 @dataclass
@@ -124,28 +146,29 @@ def clean_suspensions(df: pd.DataFrame) -> pd.DataFrame:
 
 def validate_dataframe(df: pd.DataFrame, symbol: Optional[str] = None, path: str = "",
                        events: Optional[pd.DataFrame] = None,
-                       adjust_store: Optional[AdjustmentStore] = None) -> Report:
+                       trading_days: Optional[Sequence] = None) -> Report:
     """对一个不复权 OHLCV DataFrame 跑 L1 + L2。
 
     Args:
-        df: 含 Date/Open/High/Low/Close/Volume 的不复权数据
+        df: 不复权行情，列名可用数据湖小写（date/open/...）或规范名（Date/Open/...）
         events: 复权事件表；提供后 R2.7 用后复权价计算（更准确）
-        adjust_store: 未提供 events 时用它加载事件表
+        trading_days: 交易日历；提供后 R2.8 按「遗漏交易日」判定，不会把长假误报
     """
     symbol = normalize_bs_code(symbol) if symbol else ""
+    df = normalize_columns(df)
     report = Report(symbol=symbol, path=str(path), rows=0 if df is None else int(len(df)))
     if df is None or df.empty:
         report.issues.append(Issue("R0.0", LEVEL_ERROR, "数据为空"))
         return report
 
     # ---------------- L1 结构 ----------------
+    # 只要求必需列存在；数据湖的 bars 还带 preclose/amount/turn/tradestatus/is_st，
+    # 这些是加分项（涨跌停与停牌判定要用），不应判为结构错误。
     cols = list(df.columns)
-    if cols != EXPECTED_COLUMNS:
-        missing = [c for c in EXPECTED_COLUMNS if c not in cols]
-        extra = [c for c in cols if c not in EXPECTED_COLUMNS]
+    missing = [c for c in EXPECTED_COLUMNS if c not in cols]
+    if missing:
         report.issues.append(Issue(
-            "R1.1", LEVEL_ERROR,
-            f"列名不符：缺少={missing} 多余={extra}", 1, [str(cols)]))
+            "R1.1", LEVEL_ERROR, f"缺少必需列 {missing}", len(missing), [str(cols)]))
 
     dates = pd.to_datetime(df["Date"], errors="coerce") if "Date" in df.columns else pd.Series(dtype="datetime64[ns]")
     bad_date = int(dates.isna().sum())
@@ -179,13 +202,15 @@ def validate_dataframe(df: pd.DataFrame, symbol: Optional[str] = None, path: str
 
     if "Volume" in df.columns:
         vol_raw = df["Volume"]
+        # 只有「浮点 + 存在非整数值」才是真丢精度（科学计数法落盘）。
+        # 早先只要 dtype 是 float 就告警，结果 300/300 全部误报 ——
+        # 股数落在 float64 里在 2^53 内是完全精确的，类型本身不代表丢精度。
         if pd.api.types.is_float_dtype(vol_raw):
             non_int = int((vol_raw.dropna() % 1 != 0).sum())
-            if non_int == 0 and len(df):
-                # 可能是被 pandas 转成了 float（科学计数法落盘），精度已丢
+            if non_int:
                 report.issues.append(Issue(
                     "R1.6", LEVEL_WARN,
-                    "Volume 为浮点类型，可能已被科学计数法落盘", int(len(df))))
+                    f"Volume 存在非整数值 {non_int} 行（股数应为整数，可能已丢精度）", non_int))
 
     # ---------------- L2 自洽 ----------------
     nums = {c: pd.to_numeric(df[c], errors="coerce") for c in PRICE_COLUMNS if c in df.columns}
@@ -240,13 +265,10 @@ def validate_dataframe(df: pd.DataFrame, symbol: Optional[str] = None, path: str
 
     # R2.7 涨跌幅（优先用后复权价）
     if c is not None:
-        if events is None and adjust_store is not None and symbol:
-            try:
-                events = adjust_store.load_events(symbol)
-            except Exception:
-                events = None
         if events is not None and len(events):
-            factor = AdjustmentStore.factor_from_events(events, pd.DatetimeIndex(dates))
+            from .adjustment import factor_from_events
+
+            factor = factor_from_events(events, pd.DatetimeIndex(dates))
             series = c.to_numpy(dtype="float64") * factor
             basis = "后复权价"
         else:
@@ -268,26 +290,57 @@ def validate_dataframe(df: pd.DataFrame, symbol: Optional[str] = None, path: str
                 [str(df["Date"].iloc[i]) for i in idx[:5]]))
 
         soft = soft_return_limit(symbol)
-        soft_mask = (ret > soft + EPS) & (ret <= HARD_RETURN_LIMIT)
+        # 阈值容差：A 股最小报价单位 0.01 元，低价股「一分钱」就能顶出可观百分比。
+        # 例：包钢股份 2.29 元涨停到 2.52 元，实际涨幅 10.0437%（0.01/2.29=0.44%），
+        # 直接和 10% 比会天天误报 —— 实测 140/300 只标的都因此告警。
+        # 因此按「最小价位 / 前收盘价」放宽，留 1.5 倍余量，下限 0.5%。
+        if "PreClose" in df.columns:
+            pre = pd.to_numeric(df["PreClose"], errors="coerce").to_numpy(dtype="float64")[1:]
+        else:
+            pre = series[:-1].copy()
+        pre = np.where(np.isfinite(pre) & (pre > 0), pre, series[:-1])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            tolerance = np.maximum(0.005, 1.5 * 0.01 / pre)
+        tolerance = np.nan_to_num(tolerance, nan=0.005, posinf=0.005)
+
+        soft_mask = (ret > soft + tolerance) & (ret <= HARD_RETURN_LIMIT)
         n = int(soft_mask.sum())
         if n:
             idx = np.flatnonzero(soft_mask) + 1
             report.issues.append(Issue(
                 "R2.7", LEVEL_WARN,
-                f"涨跌幅超过板块阈值 {soft:.0%}（{basis}）{n} 天，需人工复核", n,
+                f"涨跌幅超过板块阈值 {soft:.0%}（{basis}，已按最小价位放宽）{n} 天，需人工复核", n,
                 [str(df["Date"].iloc[i]) for i in idx[:5]]))
 
     # R2.8 日期间隔
     if len(valid_dates) > 1:
-        gaps = valid_dates.sort_values().diff().dt.days
-        big = gaps > GAP_CALENDAR_DAYS
-        n = int(big.sum())
-        if n:
-            report.issues.append(Issue(
-                "R2.8", LEVEL_WARN,
-                f"日期间隔 > {GAP_CALENDAR_DAYS} 天 {n} 处（长假或漏拉，需确认）", n,
-                [f"{valid_dates.sort_values().iloc[i-1].date()}→{valid_dates.sort_values().iloc[i].date()}"
-                 for i in np.flatnonzero(big.to_numpy())[:5]]))
+        ordered = valid_dates.sort_values()
+        if trading_days is not None and len(trading_days):
+            # 有交易日历：真正的判据是「两个相邻数据日之间是否漏了交易日」。
+            # 用自然日间隔判会把春节/国庆长假当成漏拉（实测 298/300 只误报）。
+            cal = pd.DatetimeIndex(trading_days).sort_values()
+            pos = cal.searchsorted(ordered.to_numpy())
+            pos = np.clip(pos, 0, len(cal) - 1)
+            steps = np.diff(pos)
+            missed = steps > 1
+            n = int(missed.sum())
+            if n:
+                idx = np.flatnonzero(missed) + 1
+                report.issues.append(Issue(
+                    "R2.8", LEVEL_WARN,
+                    f"相邻数据日之间遗漏交易日 {n} 处（疑似漏拉）", n,
+                    [f"{ordered.iloc[i-1].date()}→{ordered.iloc[i].date()}"
+                     f"（缺 {steps[i-1]-1} 天）" for i in idx[:5]]))
+        else:
+            gaps = ordered.diff().dt.days
+            big = gaps > GAP_CALENDAR_DAYS
+            n = int(big.sum())
+            if n:
+                report.issues.append(Issue(
+                    "R2.8", LEVEL_WARN,
+                    f"日期间隔 > {GAP_CALENDAR_DAYS} 天 {n} 处（长假或漏拉，需确认）", n,
+                    [f"{ordered.iloc[i-1].date()}→{ordered.iloc[i].date()}"
+                     for i in np.flatnonzero(big.to_numpy())[:5]]))
 
     # R2.9 复权因子单调不减
     # 判为 WARN 而非 ERROR：实测平安银行 sz.000001 在 2020-12-31 因子从
@@ -310,12 +363,12 @@ def validate_dataframe(df: pd.DataFrame, symbol: Optional[str] = None, path: str
     return report
 
 
-def validate_file(path: str, symbol: Optional[str] = None,
-                  adjust_store: Optional[AdjustmentStore] = None) -> Report:
-    """读取 CSV 并校验。"""
+def validate_file(path: str, symbol: Optional[str] = None) -> Report:
+    """读取 CSV 并校验（仅用于离线排查历史 CSV 数据）。"""
     name = symbol
     if not name:
         import os
+
         name = os.path.basename(path)
     try:
         df = pd.read_csv(path)
@@ -323,4 +376,4 @@ def validate_file(path: str, symbol: Optional[str] = None,
         rep = Report(symbol=normalize_bs_code(name), path=str(path))
         rep.issues.append(Issue("R0.1", LEVEL_ERROR, f"读取失败: {e}"))
         return rep
-    return validate_dataframe(df, symbol=name, path=path, adjust_store=adjust_store)
+    return validate_dataframe(df, symbol=name, path=path)
