@@ -1,40 +1,38 @@
 #!/usr/bin/env python3
-"""
-DeltaFStation 量化交易系统启动脚本
-"""
-import os
-import sys
-from backend.app import create_app
+"""DeltaFStation 启动脚本。
 
-def main():
-    """主函数"""
-    # 设置环境变量
-    os.environ.setdefault('FLASK_ENV', 'development')
-    
-    # 创建应用
+用法：
+    python run.py                 # 开发模式（默认端口 5000）
+    DELTAF_PORT=8000 python run.py
+    DELTAF_DEBUG=0 python run.py  # 关闭调试与自动重载
+"""
+from __future__ import annotations
+
+import os
+
+from backend.app import create_app
+from backend.core.config import get_config
+
+
+def main() -> None:
+    conf = get_config()
     app = create_app()
-    
-    # 获取配置
-    port = int(os.environ.get('PORT', 5000))
-    host = os.environ.get('HOST', '0.0.0.0')
-    debug = os.environ.get('FLASK_ENV') == 'development'
-    
-    print("=" * 50)
-    print("DeltaFStation 量化交易系统 v1.3.0")
-    print("=" * 50)
-    print(f"启动地址: http://{host}:{port}")
-    print(f"调试模式: {'开启' if debug else '关闭'}")
-    # 开发环境默认关闭自动重载，避免保存 data/strategies 等文件时重启进程、打断 AI 流式与日志 SSE。
-    # 改 backend 代码需手动重启；需要热重载时：FLASK_USE_RELOADER=1 python run.py
-    use_reloader = debug and os.environ.get("FLASK_USE_RELOADER", "1").strip().lower() not in (
+
+    print("=" * 56)
+    print(f"DeltaFStation v{conf.version}")
+    print("=" * 56)
+    print(f"访问地址: http://127.0.0.1:{conf.port}")
+    print(f"调试模式: {'开启' if conf.debug else '关闭'}")
+    print(f"数据目录: {conf.paths.data}")
+    print("=" * 56)
+
+    use_reloader = conf.debug and os.environ.get("DELTAF_RELOADER", "1").lower() not in (
         "0",
         "false",
         "no",
     )
-    print(f"自动重载: {'开启' if use_reloader else '关闭'}")
-    print("=" * 50)
+    app.run(host=conf.host, port=conf.port, debug=conf.debug, use_reloader=use_reloader)
 
-    app.run(host=host, port=port, debug=debug, use_reloader=use_reloader)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

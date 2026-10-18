@@ -1,0 +1,54 @@
+# DeltaFStation 应用配置
+# 唯一配置来源；环境变量可覆盖 host / port / debug。
+# 口径说明见 docs/system-spec.md。
+
+app:
+  name: DeltaFStation
+  version: 2.0.0
+  host: 0.0.0.0
+  port: 5000
+  debug: true
+
+paths:
+  data: data
+  lake: data/lake
+  snapshots: data/snapshots
+  results: data/results
+  quality: data/quality
+  meta_db: data/meta.db
+
+# 标的池与回填范围
+universe:
+  index: hs300
+  start_date: "2008-01-01"
+  backtest_years: 5          # 初期只回测最近 5 年
+  exclude_st: true
+
+# 每日任务（收盘后）
+schedule:
+  update_time: "18:00"
+  retry_until: "22:00"
+  retry_interval_min: 30
+  enabled: true
+
+# 交易成本（保守口径）
+costs:
+  commission: 0.00025        # 双边佣金 万 2.5
+  min_commission: 5.0        # 单笔最低 5 元
+  stamp_duty: 0.0005         # 印花税，仅卖出
+  slippage: 0.0005           # 双边滑点 万 5
+  lot_size: 100
+
+scoring:
+  default_version: v1.0.0
+  neutralize: industry       # industry / none
+  winsor_mad: 5.0            # 去极值：median ± k×MAD
+  min_industry_samples: 5    # 行业内样本不足时退回全市场分位
+
+backtest:
+  initial_cash: 1000000
+  is_ratio: 0.7
+  default_top_n: 20
+  default_rebal_days: 20
+  default_max_weight: 0.10
+  benchmark: sh.000300

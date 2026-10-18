@@ -1,605 +1,125 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>回测 - DeltaFStation</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
-    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <style>
-        body {
-            font-size: 13px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.5;
-        }
-        
-        .card-header h5, .card-header h6 {
-            font-size: 14px;
-            font-weight: 500;
-            margin: 0;
-        }
-        
-        .card-body {
-            font-size: 13px;
-        }
-        
-        .form-label {
-            font-size: 12px;
-            font-weight: 500;
-            margin-bottom: 0.4rem;
-        }
-        
-        .form-control, .form-select {
-            font-size: 13px;
-            padding: 0.4rem 0.75rem;
-        }
-        
-        .btn {
-            font-size: 12px;
-            padding: 0.4rem 0.75rem;
-        }
-        
-        small, .text-muted {
-            font-size: 11px;
-        }
-        
-        .backtest-history-container {
-            max-height: 230px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            padding-right: 0.25rem;
-        }
-        
-        .data-files-container {
-            max-height: 205px;
-            overflow-y: auto;
-            overflow-x: hidden;
-            padding-right: 0.25rem;
-        }
-        
-        .data-files-container::-webkit-scrollbar,
-        .backtest-history-container::-webkit-scrollbar {
-            width: 6px;
-        }
-        
-        .data-files-container::-webkit-scrollbar-track,
-        .backtest-history-container::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 3px;
-        }
-        
-        .data-files-container::-webkit-scrollbar-thumb,
-        .backtest-history-container::-webkit-scrollbar-thumb {
-            background: #c1c1c1;
-            border-radius: 3px;
-        }
-        
-        .data-files-container::-webkit-scrollbar-thumb:hover,
-        .backtest-history-container::-webkit-scrollbar-thumb:hover {
-            background: #a8a8a8;
-        }
-        
-        
-        .backtest-item {
-            padding: 0.4rem 0.5rem;
-            margin-bottom: 0.4rem;
-            border: 1px solid #e9ecef;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .backtest-item:hover {
-            background-color: #f8f9fa;
-            border-color: #007bff;
-        }
-        
-        .backtest-item h6 {
-            font-size: 13px;
-            font-weight: 500;
-            margin-bottom: 0.3rem;
-        }
-        
-        .backtest-item:last-child {
-            margin-bottom: 0;
-        }
-        
-        .data-file-item {
-            padding: 0.5rem;
-            margin-bottom: 0.5rem;
-            border: 1px solid #e9ecef;
-            border-radius: 4px;
-            transition: all 0.2s;
-        }
-        
-        .data-file-item:hover {
-            background-color: #f8f9fa;
-            border-color: #007bff;
-        }
-        
-        .data-file-item .text-truncate {
-            max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        
-        .container-fluid {
-            padding-top: 0.5rem;
-            max-width: 1600px;
-            margin: 0 auto;
-        }
+{% extends "base.html" %}
+{% block title %}回测中心 · DeltaFStation{% endblock %}
 
-        /* 统一指标行样式 */
-        .metric-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 0.25rem;
-        }
-        .metric-label {
-            color: #6c757d;
-            font-size: 14px;
-        }
-        .metric-value {
-            font-size: 14px;
-        }
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">回测中心</h1>
+    <p class="page-desc">按打分选股、定期调仓，含交易成本与涨跌停约束</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn" onclick="BacktestPage.reload()">刷新</button>
+  </div>
+</div>
 
-        /* 图表卡片统一样式 */
-        .chart-card-header {
-            padding: 0.5rem 1rem !important;
-        }
-        .chart-card-body {
-            padding: 0.5rem 1rem !important;
-        }
-        .chart-height-sm {
-            height: 160px;
-        }
-        .chart-height-md {
-            height: 180px;
-        }
-        
-        .btn-link {
-            text-decoration: none !important;
-        }
-
-        .symbol-input-wrap {
-            position: relative;
-            width: 100%;
-        }
-
-        .symbol-suggestions {
-            position: absolute;
-            top: calc(100% + 4px);
-            left: 0;
-            right: 0;
-            background: #fff;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-            max-height: 260px;
-            overflow-y: auto;
-            z-index: 1050;
-            padding: 4px;
-        }
-
-        .symbol-suggestion-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 7px 10px;
-            border-radius: 6px;
-            cursor: pointer;
-            line-height: 1.35;
-        }
-
-        .symbol-suggestion-item:hover,
-        .symbol-suggestion-item.active {
-            background: #f1f3f5;
-        }
-
-        .symbol-suggestion-code {
-            font-size: 13px;
-            font-weight: 600;
-            color: #212529;
-            min-width: 90px;
-            letter-spacing: 0.2px;
-        }
-
-        .symbol-suggestion-name {
-            font-size: 12px;
-            color: #495057;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            flex: 1;
-        }
-        
-    </style>
-</head>
-<body>
-    {% set active_page = 'strategy' %}
-    {% include '_banner.html' %}
-
-    <div class="container-fluid mt-2">
-        <div class="row">
-            <div class="col-md-3">
-                <div class="card mb-2" id="backtestConfigCard">
-                    <div class="card-header">
-                        <h5 class="mb-0"><i class="fas fa-sliders-h me-2"></i>回测参数</h5>
-                    </div>
-                    <div class="card-body">
-                        <form id="backtestConfigForm">
-                            <div class="mb-3">
-                                <label class="form-label d-flex justify-content-between align-items-center" style="font-size: 12px;">
-                                    <span>交易策略</span>
-                                    <div class="strategy-actions">
-                                        <button type="button" class="btn btn-xs btn-link p-0 text-primary me-2" onclick="viewCurrentStrategy()" title="查看源码" id="btnViewStrategy" style="display:none;">
-                                            <i class="fas fa-eye"></i>
-                                        </button>
-                                        <button type="button" class="btn btn-xs btn-link p-0 text-success me-2" onclick="downloadCurrentStrategy()" title="下载策略" id="btnDownloadStrategy" style="display:none;">
-                                            <i class="fas fa-download"></i>
-                                        </button>
-                                        <button type="button" class="btn btn-xs btn-link p-0 text-info me-2" onclick="$('strategyFileUpload').click()" title="上传策略">
-                                            <i class="fas fa-upload"></i>
-                                        </button>
-                                        <button type="button" class="btn btn-xs btn-link p-0 text-danger" onclick="deleteCurrentStrategy()" title="删除策略" id="btnDeleteStrategy" style="display:none;">
-                                            <i class="fas fa-trash-alt"></i>
-                                        </button>
-                                        <input type="file" id="strategyFileUpload" style="display: none;" accept=".py" onchange="uploadStrategyFile(this)">
-                                    </div>
-                                </label>
-                                <select class="form-select form-select-sm" id="backtestStrategySelect" onchange="handleStrategySelectChange()">
-                                    <option value="">请选择策略</option>
-                                </select>
-                            </div>
-                            <div class="mb-3 d-flex align-items-center">
-                                <label for="backtestSymbol" class="form-label mb-0 me-2" style="min-width: 80px; font-size: 12px;">投资标的</label>
-                                <div class="symbol-input-wrap">
-                                    <input type="text"
-                                           class="form-control form-control-sm"
-                                           id="backtestSymbol"
-                                           placeholder="例如：AAPL 或 000001.SS"
-                                           value="000001.SS"
-                                           autocomplete="off"
-                                           required>
-                                    <div id="backtestSymbolSuggestions" class="symbol-suggestions d-none"></div>
-                                    <datalist id="availableSymbols"></datalist>
-                                </div>
-                            </div>
-                            <div class="mb-3 d-flex align-items-center">
-                                <label for="backtestDataSource" class="form-label mb-0 me-2" style="min-width: 80px; font-size: 12px;">数据源</label>
-                                <select class="form-select form-select-sm" id="backtestDataSource">
-                                    <option value="baostock" selected>baostock</option>
-                                    <option value="miniqmt">miniqmt</option>
-                                </select>
-                            </div>
-                            <div class="mb-3 d-flex align-items-center">
-                                <label for="backtestStartDate" class="form-label mb-0 me-2" style="min-width: 80px; font-size: 12px;">开始日期</label>
-                                <input type="text" class="form-control form-control-sm date-picker" id="backtestStartDate" placeholder="请选择开始日期" required>
-                            </div>
-                            <div class="mb-3 d-flex align-items-center">
-                                <label for="backtestEndDate" class="form-label mb-0 me-2" style="min-width: 80px; font-size: 12px;">结束日期</label>
-                                <input type="text" class="form-control form-control-sm date-picker" id="backtestEndDate" placeholder="请选择结束日期" required>
-                            </div>
-                            <div class="mb-3 d-flex align-items-center">
-                                <label for="backtestCommission" class="form-label mb-0 me-2" style="min-width: 80px; font-size: 12px;">交易费率</label>
-                                <input type="number" class="form-control form-control-sm" id="backtestCommission" value="0.001" step="0.0001">
-                            </div>
-                            <div class="mb-3 d-flex align-items-center">
-                                <label for="backtestInitialCapital" class="form-label mb-0 me-2" style="min-width: 80px; font-size: 12px;">回测资金</label>
-                                <input type="number" class="form-control form-control-sm" id="backtestInitialCapital" value="100000" required>
-                            </div>
-                            <div class="d-grid">
-                                <button type="button" class="btn btn-primary btn-sm" onclick="runBacktest()">
-                                    <i class="fas fa-play me-2"></i>运行回测
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h6 class="mb-0"><i class="fas fa-history me-2"></i>回测历史</h6>
-                        <div class="d-flex align-items-center gap-2">
-                            <button type="button" class="btn btn-xs btn-link p-0 text-secondary" onclick="loadBacktestHistory()" title="刷新列表">
-                                <i class="fas fa-sync-alt"></i>
-                            </button>
-                            <button type="button" class="btn btn-xs btn-link p-0 text-secondary" onclick="clearBacktestHistory()" title="清空所有历史记录">
-                                <i class="fas fa-trash-alt"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body" style="padding: 0.75rem;">
-                        <div id="backtestHistoryList" class="backtest-history-container">
-                            <div class="text-center text-muted">
-                                <i class="fas fa-spinner fa-spin"></i> 加载中...
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h6 class="mb-0"><i class="fas fa-database me-2"></i>数据管理</h6>
-                        <div class="btn-group">
-                            <a href="/api/data/template" class="btn btn-sm btn-outline-secondary" title="下载CSV模板">
-                                <i class="fas fa-file-csv"></i>
-                            </a>
-                            <button class="btn btn-sm btn-outline-primary" onclick="$('dataFileUpload').click()" title="上传CSV数据">
-                                <i class="fas fa-upload"></i>
-                            </button>
-                            <input type="file" id="dataFileUpload" style="display: none;" accept=".csv" onchange="uploadDataFile(this)">
-                            <button class="btn btn-sm btn-outline-secondary" onclick="loadDataFiles()" title="刷新列表">
-                                <i class="fas fa-sync-alt"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body" style="padding: 0.75rem;">
-                        <div id="dataFilesList" class="data-files-container">
-                            <div class="text-center text-muted">
-                                <i class="fas fa-spinner fa-spin"></i> 加载中...
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-md-2">
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-calendar me-2"></i>日期信息</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">总交易日</span>
-                            <span id="resultTotalTradingDays" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">盈利交易日</span>
-                            <span id="resultProfitableDays" class="metric-value text-success">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">亏损交易日</span>
-                            <span id="resultLossDays" class="metric-value text-danger">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-wallet me-2"></i>资金信息</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">起始资金</span>
-                            <span id="resultInitialCapital" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">结束资金</span>
-                            <span id="resultEndingCapital" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">资金增长</span>
-                            <span id="resultCapitalGrowth" class="metric-value">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>收益指标</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">总收益率</span>
-                            <span id="resultTotalReturn" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">年化收益</span>
-                            <span id="resultAnnualizedReturn" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">日均收益率</span>
-                            <span id="resultDailyAvgReturn" class="metric-value">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-exclamation-triangle me-2"></i>风险指标</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">最大回撤</span>
-                            <span id="resultMaxDrawdown" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">收益标准差</span>
-                            <span id="resultStdDev" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">波动率</span>
-                            <span id="resultVolatility" class="metric-value">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-trophy me-2"></i>绩效指标</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">夏普比率</span>
-                            <span id="resultSharpeRatio" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">收益回撤比</span>
-                            <span id="resultReturnDrawdownRatio" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">交易胜率</span>
-                            <span id="resultWinRate" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">盈亏比</span>
-                            <span id="resultProfitLossRatio" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">平均盈利</span>
-                            <span id="resultAvgProfit" class="metric-value text-success">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">平均亏损</span>
-                            <span id="resultAvgLoss" class="metric-value text-danger">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-exchange-alt me-2"></i>交易统计</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">总盈亏</span>
-                            <span id="resultTotalPnL" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">总手续费</span>
-                            <span id="resultTotalCommission" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">总成交额</span>
-                            <span id="resultTotalTurnover" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">总成交笔数</span>
-                            <span id="resultTotalTrades" class="metric-value">-</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header" style="padding: 0.5rem;">
-                        <h6 class="mb-0"><i class="fas fa-calendar-day me-2"></i>日均统计</h6>
-                    </div>
-                    <div class="card-body" style="padding: 0.5rem;">
-                        <div class="metric-row">
-                            <span class="metric-label">日均盈亏</span>
-                            <span id="resultDailyAvgPnL" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">日均手续费</span>
-                            <span id="resultDailyAvgCommission" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row">
-                            <span class="metric-label">日均成交额</span>
-                            <span id="resultDailyAvgTurnover" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-row mb-0">
-                            <span class="metric-label">日均成交笔数</span>
-                            <span id="resultDailyAvgTrades" class="metric-value">-</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-md-7">
-                <div class="card mb-2">
-                    <div class="card-header d-flex justify-content-between align-items-center chart-card-header">
-                        <h6 class="mb-0"><i class="fas fa-chart-line me-2"></i>价格走势</h6>
-                        <div id="priceTrendLegend" class="d-flex gap-3" style="font-size: 11px;"></div>
-                    </div>
-                    <div class="card-body chart-card-body chart-height-md">
-                        <canvas id="priceTrendChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header d-flex justify-content-between align-items-center chart-card-header">
-                        <h6 class="mb-0"><i class="fas fa-wallet me-2"></i>账户净值</h6>
-                        <div id="equityLegend" class="d-flex gap-3" style="font-size: 11px;"></div>
-                    </div>
-                    <div class="card-body chart-card-body chart-height-md">
-                        <canvas id="equityChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header chart-card-header">
-                        <h6 class="mb-0"><i class="fas fa-arrow-down me-2"></i>净值回撤</h6>
-                    </div>
-                    <div class="card-body chart-card-body chart-height-sm">
-                        <canvas id="drawdownChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header chart-card-header">
-                        <h6 class="mb-0"><i class="fas fa-calendar-day me-2"></i>每日盈亏</h6>
-                    </div>
-                    <div class="card-body chart-card-body chart-height-sm">
-                        <canvas id="dailyReturnChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header chart-card-header">
-                        <h6 class="mb-0"><i class="fas fa-chart-area me-2"></i>盈亏分布（已交易日期）</h6>
-                    </div>
-                    <div class="card-body chart-card-body chart-height-sm">
-                        <canvas id="pnlDistChart"></canvas>
-                    </div>
-                </div>
-
-                <div class="card mb-2">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h6 class="mb-0"><i class="fas fa-terminal me-2"></i>系统日志 (Live Console)</h6>
-                        <button class="btn btn-xs btn-link p-0 text-secondary" onclick="clearConsole()" title="清空控制台日志">
-                            <i class="fas fa-trash-alt"></i>
-                        </button>
-                    </div>
-                    <div class="card-body p-0">
-                        <div id="liveConsole" style="height: 200px; background-color: #ffffff; color: #333; font-family: 'Consolas', 'Monaco', monospace; font-size: 11px; padding: 0.5rem; overflow-y: auto; line-height: 1.4; border-top: 1px solid #eee;">
-                            <div class="text-muted italic">等待日志输出...</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<div class="grid grid-2-1 mb-16">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">新建回测</h2>
+      <span class="card-sub">参数保存后可复现</span>
     </div>
-
-    <!-- 策略源码查看模态框 -->
-    <div class="modal fade" id="strategyCodeModal" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered modal-xl">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="strategyCodeTitle">策略源码</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body p-0">
-                    <pre id="strategyCodeContent" style="margin: 0; padding: 1rem; max-height: 600px; overflow-y: auto; background-color: #f8f9fa; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px;"></pre>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                </div>
-            </div>
+    <div class="card-body">
+      <form id="bt-form" onsubmit="BacktestPage.submit(event)">
+        <div class="grid grid-3" style="gap:12px">
+          <div class="field">
+            <label for="bt-start">开始日期</label>
+            <input type="date" id="bt-start" name="start">
+          </div>
+          <div class="field">
+            <label for="bt-end">结束日期</label>
+            <input type="date" id="bt-end" name="end">
+          </div>
+          <div class="field">
+            <label for="bt-version">打分版本</label>
+            <select id="bt-version" name="version"></select>
+          </div>
         </div>
+        <div class="grid grid-3" style="gap:12px">
+          <div class="field">
+            <label for="bt-topn">持仓只数</label>
+            <input type="number" id="bt-topn" name="top_n" value="20" min="1" max="200">
+          </div>
+          <div class="field">
+            <label for="bt-rebal">调仓间隔（交易日）</label>
+            <input type="number" id="bt-rebal" name="rebal_days" value="20" min="1" max="250">
+          </div>
+          <div class="field">
+            <label for="bt-weight">单票上限</label>
+            <input type="number" id="bt-weight" name="max_weight" value="0.10" min="0.01" max="1" step="0.01">
+          </div>
+        </div>
+        <div class="grid grid-3" style="gap:12px">
+          <div class="field">
+            <label for="bt-cash">初始资金（元）</label>
+            <input type="number" id="bt-cash" name="initial_cash" value="1000000" min="10000" step="10000">
+          </div>
+          <div class="field">
+            <label for="bt-bench">基准</label>
+            <select id="bt-bench" name="benchmark">
+              <option value="sh.000300">沪深300 价格指数</option>
+              <option value="sh.000300_tr">沪深300 全收益（待接入）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="bt-mode">样本切分</label>
+            <select id="bt-mode" name="split">
+              <option value="is_oos">IS 70% / OOS 30%</option>
+              <option value="full">全样本</option>
+            </select>
+          </div>
+        </div>
+        <div class="row mt-16">
+          <button class="btn btn-primary" type="submit" id="bt-run">运行回测</button>
+          <span class="faint small" id="bt-hint">回测引擎在 P3 阶段接入，当前提交会返回未实现提示</span>
+        </div>
+      </form>
     </div>
+  </div>
 
-    <!-- 引入页脚 -->
-    {% include '_footer.html' %}
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">执行假设</h2>
+    </div>
+    <div class="card-body">
+      <table class="kv">
+        <tr><th>成交时点</th><td>T 日收盘出信号，T+1 开盘成交</td></tr>
+        <tr><th>不可买</th><td>停牌、一字涨停</td></tr>
+        <tr><th>不可卖</th><td>停牌、一字跌停（顺延至下一交易日）</td></tr>
+        <tr><th>涨跌幅限制</th><td>主板 10%，创业板/科创板 20%</td></tr>
+        <tr><th>佣金</th><td>万 2.5，最低 5 元</td></tr>
+        <tr><th>印花税</th><td>万 5（卖出）</td></tr>
+        <tr><th>滑点</th><td>万 5</td></tr>
+        <tr><th>最小单位</th><td>100 股</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/zh.js"></script>
-    <script src="https://unpkg.com/chart.js@3.9.1/dist/chart.min.js"></script>
-    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
-</body>
-</html>
+<div class="card">
+  <div class="card-head">
+    <h2 class="card-title">回测记录</h2>
+    <span class="card-sub" id="bt-count">—</span>
+  </div>
+  <div class="card-body tight">
+    <div class="table-wrap" style="max-height:520px">
+      <table>
+        <thead>
+          <tr>
+            <th>回测 ID</th><th>区间</th><th class="right">持仓</th>
+            <th class="right">总收益</th><th class="right">年化</th>
+            <th class="right">夏普</th><th class="right">最大回撤</th>
+            <th>创建时间</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="bt-body">
+          <tr><td colspan="9" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
+{% endblock %}

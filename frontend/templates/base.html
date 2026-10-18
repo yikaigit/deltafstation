@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DeltaFStation{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">DeltaFStation</span>
+      <span class="brand-sub">A股量化研究站</span>
+    </div>
+    <nav class="nav">
+      <a href="/" class="{{ 'active' if active == 'index' else '' }}">首页</a>
+      <a href="/data" class="{{ 'active' if active == 'data' else '' }}">数据管理</a>
+      <a href="/scores" class="{{ 'active' if active == 'scores' else '' }}">每日打分</a>
+      <a href="/backtest" class="{{ 'active' if active == 'backtest' else '' }}">回测中心</a>
+    </nav>
+    <div class="topbar-right">
+      <span id="topbar-status"><span class="dot"></span>加载中</span>
+      <span class="faint">v{{ version }}</span>
+    </div>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <div id="drawer-mask" class="drawer-mask" onclick="closeDrawer()"></div>
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <strong id="drawer-title" class="card-title">详情</strong>
+      <button class="drawer-close" onclick="closeDrawer()" aria-label="关闭">×</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

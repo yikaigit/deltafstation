@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}每日打分 · DeltaFStation{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">每日打分</h1>
+    <p class="page-desc">横截面百分位综合评分，同日可比、跨日可追</p>
+  </div>
+  <div class="page-actions">
+    <select id="score-version" onchange="ScorePage.reload()" title="打分版本"></select>
+    <input type="date" id="score-date" onchange="ScorePage.reload()" title="交易日期">
+    <button class="btn" onclick="ScorePage.reload()">刷新</button>
+  </div>
+</div>
+
+<div class="grid grid-4 mb-16">
+  <div class="card stat">
+    <div class="stat-label">覆盖标的</div>
+    <div class="stat-value" id="s-count">—</div>
+    <div class="stat-hint" id="s-version-hint">—</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">平均分</div>
+    <div class="stat-value" id="s-avg">—</div>
+    <div class="stat-hint">横截面百分位均值</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">强烈看多 / 看多</div>
+    <div class="stat-value" id="s-bull">—</div>
+    <div class="stat-hint">评分 ≥ 90 / ≥ 70</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">看空 / 强烈看空</div>
+    <div class="stat-value" id="s-bear">—</div>
+    <div class="stat-hint">评分 &lt; 30 / &lt; 10</div>
+  </div>
+</div>
+
+<div class="grid grid-2-1 mb-16">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">评分榜单</h2>
+      <span class="card-sub" id="s-list-sub">—</span>
+      <div class="spacer"></div>
+      <div class="row">
+        <input type="text" id="score-search" placeholder="搜索代码或名称" oninput="ScorePage.applyFilter()">
+        <select id="score-industry" onchange="ScorePage.applyFilter()">
+          <option value="">全部行业</option>
+        </select>
+        <select id="score-grade" onchange="ScorePage.applyFilter()">
+          <option value="">全部评级</option>
+          <option value="强烈看多">强烈看多</option>
+          <option value="看多">看多</option>
+          <option value="中性">中性</option>
+          <option value="看空">看空</option>
+          <option value="强烈看空">强烈看空</option>
+        </select>
+      </div>
+    </div>
+    <div class="card-body tight">
+      <div class="table-wrap" style="max-height:620px">
+        <table>
+          <thead>
+            <tr>
+              <th class="right" style="width:52px">#</th>
+              <th>代码</th><th>名称</th><th>行业</th>
+              <th class="right">综合分</th><th class="right">绝对分</th>
+              <th>评级</th><th style="width:120px">维度</th>
+            </tr>
+          </thead>
+          <tbody id="score-body">
+            <tr><td colspan="8" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">行业均分</h2>
+      <span class="card-sub">按综合分排序</span>
+    </div>
+    <div class="card-body tight">
+      <div class="table-wrap" style="max-height:620px">
+        <table>
+          <thead>
+            <tr><th>行业</th><th class="right">只数</th><th class="right">均分</th><th class="right">多头</th></tr>
+          </thead>
+          <tbody id="industry-body">
+            <tr><td colspan="4" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/scores.js') }}"></script>
+{% endblock %}

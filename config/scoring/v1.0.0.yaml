@@ -1,0 +1,44 @@
+# 打分版本 v1.0.0 —— 技术四维（先跑通）
+# 因子清单与公式见 docs/system-spec.md §5.2
+version: v1.0.0
+description: 技术四维打分（趋势/动量/量能/风险），不含估值与质量
+
+dimensions:
+  trend:
+    weight: 0.35
+    factors:
+      - ma_bias_20
+      - ma_bias_60
+      - ma_bias_120
+      - macd_hist_norm
+      - adx_dir
+      - slope_60
+  momentum:
+    weight: 0.28
+    factors:
+      - roc_20
+      - roc_60
+      - roc_120
+      - rs_60
+      - rsi_health
+  volume:
+    weight: 0.22
+    factors:
+      - vol_ratio
+      - obv_z
+      - mfi_14
+      - turn_rank
+  risk:
+    weight: 0.15
+    factors:
+      - atr_pct_rank
+      - hv_60
+      - downside_vol
+      - dd_1y
+
+grades:
+  - {min_pct: 90, label: 强烈看多, key: strong_buy}
+  - {min_pct: 70, label: 看多, key: buy}
+  - {min_pct: 30, label: 中性, key: neutral}
+  - {min_pct: 10, label: 看空, key: sell}
+  - {min_pct: 0, label: 强烈看空, key: strong_sell}

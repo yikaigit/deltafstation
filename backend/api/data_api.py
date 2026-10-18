@@ -1,332 +1,132 @@
-"""
-数据管理 API（前缀 /api/data）：
+"""数据管理 API。
 
-- GET  /api/data/files           文件列表
-- POST /api/data/files           上传 CSV 或按 symbol 拉取数据
-- GET  /api/data/files/<filename>  文件详情/预览
-- DELETE /api/data/files/<filename>  删除文件
-- GET  /api/data/template        下载 CSV 模板
-- GET  /api/data/live/<symbol>    实时行情，支持 ?source=&history=
-- GET  /api/data/symbols/<symbol>/files  该标的对应数据文件信息
-- POST /api/data/symbols/<symbol>/files  按标的拉取并创建/更新数据文件
-- GET  /api/data/symbols/catalog  获取标的目录（读取本地 symbol_code_name_dict.json）
+- GET /api/universe        标的列表（含行业/板块）
+- GET /api/data/status     数据覆盖情况（数据集 + 每标的）
+- GET /api/data/quality    最近一次数据校验报告
 """
-from flask import Blueprint, request, jsonify, send_file, current_app
-import os
-import io
+from __future__ import annotations
+
 import json
-import pandas as pd
-from datetime import datetime
-from backend.core.data_manager import DataManager, DEFAULT_SOURCE, SUPPORTED_SOURCES
-from backend.core.live_data_manager import live_data_manager
+from pathlib import Path
+from typing import Any, Dict
 
-data_bp = Blueprint('data', __name__)
+from flask import Blueprint, request
 
-def get_data_manager():
-    """获取 DataManager 实例"""
-    data_folder = current_app.config.get('DATA_FOLDER', 
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data'))
-    return DataManager(data_folder)
+from backend.api import fail, ok
+from backend.core.config import get_config
+from backend.core.lake import LakeError, get_lake
 
-def create_file():
-    """创建/上传CSV数据文件（内部函数，由 create_file_from_source 调用）"""
+data_bp = Blueprint("data", __name__)
+
+
+def _universe_frame():
+    lake = get_lake()
+    df = lake.read("universe")
+    if df.empty:
+        return df
+    for col in ("name", "board", "industry_l1", "list_date", "is_st", "in_hs300"):
+        if col not in df.columns:
+            df[col] = None
+    return df
+
+
+@data_bp.route("/universe", methods=["GET"])
+def list_universe():
     try:
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
-        
-        if file and file.filename.endswith('.csv'):
-            dm = get_data_manager()
-            
-            # 保存文件
-            filename = file.filename
-            filepath = os.path.join(dm.raw_folder, filename)
-            file.save(filepath)
-            
-            # 验证CSV格式
-            df = pd.read_csv(filepath)
-            required_columns = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
-            
-            if not all(col in df.columns for col in required_columns):
-                os.remove(filepath)
-                return jsonify({'error': f'CSV must contain columns: {required_columns}'}), 400
-            
-            return jsonify({
-                'id': filename,
-                'filename': filename,
-                'rows': len(df),
-                'columns': list(df.columns)
-            }), 201
-        
-        return jsonify({'error': 'Invalid file type'}), 400
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        df = _universe_frame()
+        if df.empty:
+            return ok({"items": [], "count": 0, "note": "标的表尚未建立，请先执行数据回填"})
 
-@data_bp.route('/files', methods=['POST'])
-def create_file_from_source():
-    """
-    从外部数据源获取数据并创建文件 - POST /api/data/files
-    支持两种方式：
-    1. 文件上传：multipart/form-data with 'file' field
-    2. 从数据源下载：application/json with 'symbol' field
-    """
+        industry = (request.args.get("industry") or "").strip()
+        board = (request.args.get("board") or "").strip()
+        keyword = (request.args.get("q") or "").strip()
+        limit = min(int(request.args.get("limit", 500)), 5000)
+
+        if industry:
+            df = df[df["industry_l1"] == industry]
+        if board:
+            df = df[df["board"] == board]
+        if keyword:
+            mask = df["code"].astype(str).str.contains(keyword, case=False, na=False) | df[
+                "name"
+            ].astype(str).str.contains(keyword, na=False)
+            df = df[mask]
+
+        items = df.head(limit).to_dict("records")
+        for item in items:
+            for key, value in list(item.items()):
+                if hasattr(value, "isoformat"):
+                    item[key] = value.isoformat()
+        return ok({"items": items, "count": len(items), "total": int(len(df))})
+    except LakeError as exc:
+        return fail("lake_unavailable", str(exc), 503)
+    except Exception as exc:  # pragma: no cover - 兜底
+        return fail("universe_error", str(exc), 500)
+
+
+@data_bp.route("/data/status", methods=["GET"])
+def data_status():
+    """返回数据湖各数据集的覆盖概况 + 每标的明细。"""
     try:
-        # 检查是否为文件上传
-        if 'file' in request.files:
-            return create_file()
-        
-        # 否则视为从数据源下载
-        data = request.get_json() or {}
-        symbol = data.get('symbol', '').upper()
-        period = data.get('period', '1y')
-        data_source = data.get('data_source')
-        
-        if not symbol:
-            return jsonify({'error': 'Symbol is required when fetching from data source'}), 400
-        
-        dm = get_data_manager()
-        filename, df, status, source = dm.fetch_data(
-            symbol,
-            period=period,
-            update_existing=False,
-            data_source=data_source
-        )
-        
-        return jsonify({
-            'id': filename,
-            'filename': filename,
-            'rows': len(df),
-            'symbol': symbol,
-            'period': period,
-            'source': source
-        }), 201
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        lake = get_lake()
+        datasets: Dict[str, Dict[str, Any]] = {}
+        for name in ("bars", "valuation", "adj_factor", "fundamental", "universe", "calendar"):
+            exists = lake.exists(name)
+            info: Dict[str, Any] = {"exists": exists}
+            if exists:
+                try:
+                    if name in ("bars", "valuation"):
+                        df = lake.read(name, columns=["date", "code"])
+                        info["rows"] = int(len(df))
+                        if not df.empty:
+                            info["first_date"] = df["date"].min().strftime("%Y-%m-%d")
+                            info["last_date"] = df["date"].max().strftime("%Y-%m-%d")
+                            info["symbols"] = int(df["code"].nunique())
+                    else:
+                        info["rows"] = int(len(lake.read(name)))
+                except Exception as exc:  # 单个数据集异常不影响整体
+                    info["error"] = str(exc)
+            datasets[name] = info
 
-@data_bp.route('/files', methods=['GET'])
-def list_files():
-    """获取数据文件列表 - GET /api/data/files"""
+        symbols = []
+        if lake.exists("bars"):
+            cov = lake.coverage("bars")
+            names = {}
+            if lake.exists("universe"):
+                uni = lake.read("universe", columns=["code", "name", "industry_l1", "board"])
+                names = {r["code"]: r for r in uni.to_dict("records")}
+            for row in cov.to_dict("records"):
+                meta = names.get(row["code"], {})
+                symbols.append(
+                    {
+                        "code": row["code"],
+                        "name": meta.get("name"),
+                        "industry": meta.get("industry_l1"),
+                        "board": meta.get("board"),
+                        "first_date": row["first_date"].strftime("%Y-%m-%d") if row.get("first_date") is not None else None,
+                        "last_date": row["last_date"].strftime("%Y-%m-%d") if row.get("last_date") is not None else None,
+                        "rows": int(row["rows"]),
+                    }
+                )
+
+        return ok({"datasets": datasets, "symbols": symbols, "symbol_count": len(symbols)})
+    except LakeError as exc:
+        return fail("lake_unavailable", str(exc), 503)
+    except Exception as exc:  # pragma: no cover
+        return fail("status_error", str(exc), 500)
+
+
+@data_bp.route("/data/quality", methods=["GET"])
+def data_quality():
+    """最近一次数据校验报告（P1 生成）。"""
+    folder = Path(get_config().paths.quality)
+    reports = sorted(folder.glob("report_*.json")) if folder.exists() else []
+    if not reports:
+        return ok({"available": False, "note": "尚未生成校验报告"})
+    latest = reports[-1]
     try:
-        dm = get_data_manager()
-        
-        if not os.path.exists(dm.raw_folder):
-            return jsonify({'files': []})
-        
-        files = []
-        for filename in os.listdir(dm.raw_folder):
-            if filename.endswith('.csv'):
-                filepath = os.path.join(dm.raw_folder, filename)
-                file_stat = os.stat(filepath)
-                files.append({
-                    'id': filename,
-                    'filename': filename,
-                    'size': file_stat.st_size,
-                    'modified': datetime.fromtimestamp(file_stat.st_mtime).isoformat()
-                })
-        
-        return jsonify({'files': files})
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@data_bp.route('/files/<filename>', methods=['GET', 'DELETE'])
-def handle_file(filename):
-    """
-    处理单个数据文件 - GET/DELETE /api/data/files/<filename>
-    
-    GET: 获取数据文件详情/预览
-    DELETE: 删除数据文件
-    """
-    try:
-        dm = get_data_manager()
-        filepath = os.path.join(dm.raw_folder, filename)
-        
-        if not os.path.exists(filepath):
-            return jsonify({'error': 'File not found'}), 404
-        
-        if request.method == 'GET':
-            full = request.args.get('full', 'false').lower() == 'true'
-            df = pd.read_csv(filepath)
-            
-            # 统一列名：首字母大写，防止大小写导致前端匹配失败
-            df.columns = [col.capitalize() for col in df.columns]
-            
-            total_rows = len(df)
-            columns = list(df.columns)
-            start_date = "N/A"
-            end_date = "N/A"
-            
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-                start_date = df['Date'].min().strftime('%Y-%m-%d')
-                end_date = df['Date'].max().strftime('%Y-%m-%d')
-                df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
-
-            # 根据参数决定是否返回完整数据
-            if full:
-                preview_df = df
-            elif total_rows <= 100:
-                preview_df = df
-            else:
-                preview_df = pd.concat([df.head(50), df.tail(50)])
-
-            return jsonify({
-                'id': filename,
-                'filename': filename,
-                'columns': columns,
-                'data': preview_df.to_dict('records'),
-                'total_rows': total_rows,
-                'start_date': start_date,
-                'end_date': end_date,
-                'is_truncated': not full and total_rows > 100
-            })
-        
-        elif request.method == 'DELETE':
-            os.remove(filepath)
-            return jsonify({'message': f'File {filename} deleted successfully'}), 200
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@data_bp.route('/template', methods=['GET'])
-def download_template():
-    """下载CSV数据模板"""
-    output = io.BytesIO()
-    output.write("Date,Open,High,Low,Close,Volume\n".encode('utf-8'))
-    output.write("2026-01-01,150.00,155.00,149.00,153.00,1000000\n".encode('utf-8'))
-    output.seek(0)
-    return send_file(
-        output,
-        mimetype='text/csv',
-        as_attachment=True,
-        download_name='data_template.csv'
-    )
-
-
-@data_bp.route('/live/<symbol>', methods=['GET'])
-def get_live_quote(symbol):
-    """获取实时行情 - GET /api/data/live/<symbol>?source=baostock|miniqmt&history=true|false
-
-    注意：baostock 网关轮询 5 分钟 K 线，盘中通常不刷新，结果非实时。
-    """
-    try:
-        source = live_data_manager.normalize_source(request.args.get('source'))
-        include_history = request.args.get('history', 'false').lower() == 'true'
-        quote = live_data_manager.get_quote(symbol, include_history=include_history, source=source)
-        
-        if quote:
-            return jsonify(quote)
-            
-        # 数据未就绪时返回 200 + loading 状态
-        live_data_manager.subscribe([symbol], source=source)
-        return jsonify({
-            'symbol': symbol,
-            'data_source': source,
-            'status': 'loading',
-            'message': 'Quote not yet available, subscribing...'
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@data_bp.route('/symbols/catalog', methods=['GET'])
-def get_symbol_catalog():
-    """获取标的目录（固定格式: {"source","count","items"}）- GET /api/data/symbols/catalog"""
-    try:
-        dm = get_data_manager()
-        source = (request.args.get('source') or '').strip().lower()
-        if source not in SUPPORTED_SOURCES:
-            source = DEFAULT_SOURCE
-
-        source_file_map = {
-            'miniqmt': 'symbols_dict_miniqmt.json',
-            'baostock': 'symbols_dict_baostock.json',
-        }
-        symbol_dict_file = os.path.join(dm.raw_folder, source_file_map[source])
-        if not os.path.exists(symbol_dict_file):
-            return jsonify({
-                'error': f'{source_file_map[source]} not found, please generate it first',
-                'source': source
-            }), 404
-
-        with open(symbol_dict_file, 'r', encoding='utf-8') as f:
+        with open(latest, "r", encoding="utf-8") as f:
             payload = json.load(f)
-
-        if not isinstance(payload, dict) or not isinstance(payload.get('items'), list):
-            return jsonify({'error': f'Invalid {source_file_map[source]} format', 'source': source}), 400
-
-        items = [
-            {
-                'code': str(item.get('code', '')).upper(),
-                'name': str(item.get('name', '')),
-                'label': (
-                    str(item.get('label'))
-                    if item.get('label')
-                    else f"{str(item.get('name', ''))} ({str(item.get('code', '')).upper()})"
-                ),
-            }
-            for item in payload.get('items', [])
-            if str(item.get('code', '')).strip()
-        ]
-
-        return jsonify({
-            'source': payload.get('source', source),
-            'count': len(items),
-            'items': items,
-            'from_cache': True,
-            'fetched_at': payload.get('fetched_at') or datetime.fromtimestamp(os.path.getmtime(symbol_dict_file)).isoformat()
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@data_bp.route('/symbols/<symbol>/files', methods=['GET', 'POST'])
-def handle_symbol_files(symbol):
-    """
-    处理指定股票代码的数据文件 - GET/POST /api/data/symbols/<symbol>/files
-    
-    GET: 查找并返回该股票代码的最新数据文件
-    POST: 从数据源下载指定时间区间的数据并创建文件
-    """
-    try:
-        dm = get_data_manager()
-        
-        if request.method == 'GET':
-            info = dm.get_file_info(symbol)
-            if info:
-                return jsonify(info)
-            return jsonify({'error': f'No data file found for symbol {symbol}'}), 404
-        
-        elif request.method == 'POST':
-            data = request.get_json() or {}
-            start_date = data.get('start_date')
-            end_date = data.get('end_date')
-            data_source = data.get('data_source')
-            force_refresh = bool(data.get('force_refresh', False))
-            
-            filename, df, status, source = dm.fetch_data(
-                symbol=symbol,
-                start_date=start_date,
-                end_date=end_date,
-                update_existing=True,
-                data_source=data_source,
-                force_refresh=force_refresh
-            )
-            
-            return jsonify({
-                'id': filename,
-                'filename': filename,
-                'rows': len(df),
-                'symbol': symbol,
-                'status': status,
-                'source': source
-            }), 201
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except (OSError, json.JSONDecodeError) as exc:
+        return fail("quality_read_error", str(exc), 500)
+    return ok({"available": True, "file": latest.name, "report": payload})

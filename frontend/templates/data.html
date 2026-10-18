@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}数据管理 · DeltaFStation{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">数据管理</h1>
+    <p class="page-desc">本地行情、估值、财务与复权因子的覆盖情况</p>
+  </div>
+  <div class="page-actions">
+    <button class="btn" id="btn-refresh" onclick="DataPage.reload()">刷新</button>
+    <button class="btn btn-primary" id="btn-update" onclick="DataPage.triggerUpdate()">触发增量更新</button>
+  </div>
+</div>
+
+<div class="grid grid-4 mb-16">
+  <div class="card stat">
+    <div class="stat-label">标的数量</div>
+    <div class="stat-value" id="d-symbols">—</div>
+    <div class="stat-hint">沪深300 成分</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">行情行数</div>
+    <div class="stat-value" id="d-rows">—</div>
+    <div class="stat-hint">bars 数据集</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">数据区间</div>
+    <div class="stat-value" id="d-range" style="font-size:16px">—</div>
+    <div class="stat-hint">首末交易日</div>
+  </div>
+  <div class="card stat">
+    <div class="stat-label">数据集就绪</div>
+    <div class="stat-value" id="d-ready">—</div>
+    <div class="stat-hint" id="d-ready-hint">共 6 个数据集</div>
+  </div>
+</div>
+
+<div class="card mb-16">
+  <div class="card-head">
+    <h2 class="card-title">数据集</h2>
+    <span class="card-sub">Parquet 数据湖</span>
+    <div class="spacer"></div>
+    <span class="card-sub" id="d-updated"></span>
+  </div>
+  <div class="card-body">
+    <div class="chips" id="dataset-chips"><span class="faint small">加载中…</span></div>
+  </div>
+</div>
+
+<div class="card mb-16">
+  <div class="card-head">
+    <h2 class="card-title">标的明细</h2>
+    <span class="card-sub" id="symbol-count">—</span>
+    <div class="spacer"></div>
+    <div class="row">
+      <input type="text" id="symbol-search" placeholder="搜索代码或名称" oninput="DataPage.filter()">
+      <select id="symbol-industry" onchange="DataPage.filter()">
+        <option value="">全部行业</option>
+      </select>
+    </div>
+  </div>
+  <div class="card-body tight">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>代码</th><th>名称</th><th>板块</th><th>行业</th>
+            <th>起始日</th><th>最新日</th><th class="right">行数</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody id="symbol-body">
+          <tr><td colspan="8" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2 class="card-title">任务记录</h2>
+    <span class="card-sub">最近 20 条</span>
+  </div>
+  <div class="card-body tight">
+    <div class="table-wrap" style="max-height:320px">
+      <table>
+        <thead>
+          <tr><th>任务 ID</th><th>类型</th><th>状态</th><th>进度</th><th>消息</th><th>创建时间</th></tr>
+        </thead>
+        <tbody id="job-body">
+          <tr><td colspan="6" class="muted" style="padding:24px;text-align:center">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/data.js') }}"></script>
+{% endblock %}
